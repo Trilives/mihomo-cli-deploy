@@ -1,23 +1,29 @@
-# Runtime/cache
+# Runtime files
+.run/
 cache.db
 
-# Local backups/backfill files
-backups/
-config.yaml.bak.*
-*.bak.*
+# Download cache / archives
+source/downloads/
+source/*.zip
+source/*.tar.gz
+source/*.tgz
+source/*.gz
 
-# Downloaded binaries and geo data (restore via scripts/sync/sync_assets.sh)
+# Upstream downloadable assets (large binaries)
 mihomo
-Country.mmdb
+ui/
+country.mmdb
+geoip.metadb
 geoip.dat
-GeoIP.dat
 GeoSite.dat
 
-# Temporary artifacts
-gh-pages.zip
-config.converted.yaml
-*.raw.*
+# Local backups / temp files
+backups/
+config.yaml.bak.*
+*.tmp
+*.swp
+*~
 
-# Python cache
-__pycache__/
-*.pyc
+# Optional OS junk
+.DS_Store
+Thumbs.db
