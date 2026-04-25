@@ -6,7 +6,6 @@
 
 - `config.yaml`：主配置文件（核心）
 - `mihomo`：Mihomo 可执行文件
-- `ui/`：Web UI 静态资源（`external-ui: ui`）
 - `source/`：订阅/规则来源相关文件
 - `country.mmdb`、`geoip.metadb`、`geoip.dat`、`GeoSite.dat`：地理库和规则数据库
 
