@@ -9,7 +9,7 @@
 | `mihomo` | Mihomo 核心二进制文件 | 官方 GitHub Release |
 | `config.yaml` | 主配置文件 (核心) | 手动维护 + 订阅转换覆盖 |
 | `ui/` | Web UI 静态资源 (`metacubexd`) | 官方 GitHub Release |
-| `source/` | 原始订阅链接、规则备份及下载暂存 | 手动维护 |
+| `source/` | 下载暂存 | 手动维护 |
 | `*.dat` / `*.mmdb` | 地理位置数据库与规则集 | MetaCubeX 规则库 |
 
 ---
