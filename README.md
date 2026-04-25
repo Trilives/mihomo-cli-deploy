@@ -2,10 +2,11 @@
 
 本目录用于运行 Mihomo（含 Web UI）并管理由订阅转换生成的配置。
 
-## 目录结构
+## 目录结构(均由脚本下载)
 
 - `config.yaml`：主配置文件（核心）
 - `mihomo`：Mihomo 可执行文件
+- `ui/`：Web UI 静态资源（`external-ui: ui`）
 - `source/`：订阅/规则来源相关文件
 - `country.mmdb`、`geoip.metadb`、`geoip.dat`、`GeoSite.dat`：地理库和规则数据库
 
