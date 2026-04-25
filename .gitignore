@@ -17,3 +17,7 @@ GeoSite.dat
 gh-pages.zip
 config.converted.yaml
 *.raw.*
+
+# Python cache
+__pycache__/
+*.pyc
