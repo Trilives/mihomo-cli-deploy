@@ -144,4 +144,34 @@ for part in "${query_parts[@]}"; do
 done
 
 final_url="${backend_base%/}/sub?${query}"
-printf '%s\n' "$final_url"
+
+
+# 1. 确定保存目录（脚本所在目录的上一级）
+# "$0" 是脚本路径，dirname 获取目录，/.. 代表上一级
+PARENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# 2. 确定文件名
+if [[ -z "$filename" ]]; then
+    output_name="config.yaml"
+else
+    output_name="$filename"
+fi
+
+# 3. 拼接完整的目标路径
+output_path="${PARENT_DIR}/${output_name}"
+
+echo "---------------------------------------------------"
+echo "生成的转换链接: $final_url"
+echo "目标保存路径: $output_path"
+echo "---------------------------------------------------"
+
+echo "正在请求配置文件..."
+
+# 4. 执行下载并保存到上一级目录
+if curl -L -f -s -o "$output_path" "$final_url"; then
+    echo "成功！文件已保存在上一级目录。"
+    echo "文件信息: $(ls -lh "$output_path")"
+else
+    echo "错误: 下载失败，请检查网络或订阅链接是否有效。"
+    exit 1
+fi
