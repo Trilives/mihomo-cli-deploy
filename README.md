@@ -88,6 +88,8 @@ dns:
     - 1.1.1.1
 ```
 
+> **⚠️ Linux 用户注意**：DNS 监听端口 53 可能与系统 DNS 服务（如 `systemd-resolved`）冲突。建议改为 `listen: 0.0.0.0:1053`。
+
 ### 第四步：测试启动
 
 在当前目录启动 Mihomo（不需要 root 权限）：
@@ -302,9 +304,15 @@ tun:
 dns:
   enable: true
   enhanced-mode: fake-ip
+  listen: 0.0.0.0:1053  # Linux 推荐用 1053 避免与系统 DNS 冲突
 ```
 
 > 建议把这段视为"本地定制区"，每次用订阅重新生成后都检查是否仍在。
+> 
+> **DNS 端口说明**：
+> - **Linux**：推荐使用 `1053` 替代 `53`，避免与 `systemd-resolved` 等系统 DNS 服务冲突
+> - **macOS/Windows**：可使用 `53`，但需要 root/管理员权限
+> - 启用 TUN 模式时，DNS 会通过劫持规则自动转发，端口冲突影响较小
 
 ### 推荐更新流程（避免手动项被覆盖）
 
