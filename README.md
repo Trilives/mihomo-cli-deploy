@@ -1,6 +1,6 @@
 # Mihomo 本地配置说明
 
-本目录用于运行 Mihomo（含 Web UI）并管理由订阅转换生成的配置。
+本目录用于运行 Mihomo（含 Web UI）并管理由订阅下载或订阅转换生成的配置。
 
 ## 目录结构(均由脚本下载，初始仓库没有)
 
@@ -36,9 +36,22 @@
 
 有两种方式获得 `config.yaml`：
 
-**方式 A：使用订阅链接（推荐）**
+**方式 A：原样下载订阅（适用于订阅本身已经是 Clash/Mihomo 格式）**
 
-直接运行脚本，自动生成并保存配置文件：
+直接运行脚本，把订阅内容原样下载到本地：
+
+```bash
+./Script/download_subscription.sh -u 'https://your-subscribe-link'
+```
+
+脚本会把订阅内容保存到 `config.yaml`。
+
+如需自定义文件名：
+```bash
+./Script/download_subscription.sh -u 'https://your-subscribe-link' -f 'config.yaml'
+```
+
+**方式 B：使用订阅转换（适用于需要先把原始订阅转成 clash 格式）**
 
 ```bash
 ./Script/gen_convert_url.sh -u 'https://your-subscribe-link'
@@ -51,7 +64,7 @@
 ./Script/gen_convert_url.sh -u 'https://your-subscribe-link' -b mirror -p 'emoji=true' -f 'config.yaml'
 ```
 
-**方式 B：手动编写配置**
+**方式 C：手动编写配置**
 
 参考 Mihomo 官方文档，手动创建 `config.yaml`。
 
@@ -143,6 +156,20 @@ http://192.168.1.100:9090/ui/
 - ✓ 规则数量是否正确
 - ✓ 代理分组是否正常
 
+**功能测试（可选）：**
+
+在 Web UI 中选择一个代理，然后尝试访问外部网址测试连接：
+
+```bash
+# 终端测试（配置了 TUN 自动接管）
+curl -I https://www.google.com
+
+# 或使用代理模式指定代理访问
+# 在 Web UI 中切换到目标代理分组，然后访问
+```
+
+在 Web UI 中也可以看到实时的流量统计和连接状态。若能成功访问外部网站，说明代理正常工作。
+
 按 `Ctrl+C` 停止 Mihomo。
 
 ### 第六步：安装为系统服务（可选）
@@ -194,6 +221,24 @@ sudo journalctl -u mihomo -f
 ```bash
 ./mihomo -v
 ls -lah ui | head
+```
+
+### 订阅原样下载脚本
+
+`Script/download_subscription.sh` 用于把已经是 Clash/Mihomo 格式的订阅内容直接下载到本地。
+
+参数说明：
+- `-u, --url <url>`：订阅链接（必填）
+- `-f, --filename <name>`：保存文件名（默认：config.yaml）
+
+使用示例：
+
+```bash
+# 直接下载订阅到 config.yaml
+./Script/download_subscription.sh -u 'https://example.com/sub?token=abc'
+
+# 保存为自定义文件名
+./Script/download_subscription.sh -u 'https://example.com/sub?token=abc' -f 'my-config.yaml'
 ```
 
 ### 订阅转换链接生成脚本
