@@ -10,173 +10,9 @@
 - `source/`：订阅/规则来源相关文件
 - `country.mmdb`、`geoip.metadb`、`geoip.dat`、`GeoSite.dat`：地理库和规则数据库
 
-## 配置来源约定
+---
 
-`config.yaml` 中大部分内容来自“订阅链接 -> 肥羊后端转换”的自动生成结果，主要包括：
-
-- `proxies`
-- `proxy-groups`
-- `rules`（如果转换模板包含）
-
-这些自动生成段在每次重新转换并覆盖配置时可能变化。
-
-## 手动维护区（建议保留）
-
-你当前在配置顶部手动维护的关键项主要是：
-
-### 控制面板设置
-external-controller: 0.0.0.0:9090
-external-ui: ui
-secret: "" # 可选：面板访问密码
-
-### TUN 强化配置 (推荐)
-tun:
-  enable: true
-  stack: gvisor
-  auto-route: true
-  auto-detect-interface: true
-  mtu: 1500
-  strict-route: true
-  dns-hijack:
-    - any:53
-    - tcp://any:53
-
-dns中添加enhanced-mode: fake-ip
-
-> 建议把这段视为“本地定制区”，每次用订阅重新生成后都检查是否仍在。
-
-## 推荐更新流程（避免手动项被覆盖）
-
-1. 通过订阅链接使用后端转换生成新配置。
-2. 覆盖更新 `config.yaml`。
-3. 对照本 README，将“手动维护区”补回（尤其是 `tun`、`external-controller`、`external-ui`）。
-4. 启动 Mihomo 并检查日志是否正常。
-
-## 启动示例
-
-在当前目录运行：
-
-```bash
-./mihomo -d .
-```
-
-如需 root 权限（例如接管路由/TUN）：
-
-```bash
-sudo ./mihomo -d .
-```
-
-## 快速检查项
-
-- 面板端口是否可访问：`9090`
-- UI 目录是否存在：`ui/`
-- DNS 劫持是否启用：`tun.dns-hijack`
-- 规则模式是否符合预期：`mode: Rule`
-
-## 备注
-
-- 若系统 DNS/网络管理器与 TUN 冲突，优先检查系统 DNS 服务设置（如 `systemd-resolved`）与防火墙转发规则。
-- 若测速或连通性异常，可先临时切换 `proxy-groups` 到单节点排查。
-
-## 订阅转换链接生成脚本
-
-根目录的 `Script/` 目录已提供脚本：`Script/gen_convert_url.sh`
-
-该脚本自动生成转换链接并直接下载保存配置文件，支持：
-
-- 官方后端：`https://sub.fndroid.com`
-- 镜像（肥羊）后端：`https://api.v1.mk`
-- 自定义后端地址
-- 附加任意参数（如 `emoji=true`、`udp=true` 等）
-- 自定义文件名和远程配置模板
-
-参数说明：
-- `-u, --url <url>`：原始订阅链接（必填）
-- `-b, --backend <name|url>`：后端选择，可选 `official` | `mirror` | 自定义 URL（默认：official）
-- `-t, --target <target>`：转换目标格式（默认：clash）
-- `-c, --config <url>`：远程配置模板 URL（可选）
-- `-f, --filename <name>`：保存文件名（默认：config.yaml）
-- `-p, --param <k=v>`：追加自定义参数（可重复）
-
-示例：
-
-```bash
-# 使用官方后端，保存为 config.yaml（最简单）
-./Script/gen_convert_url.sh -u 'https://example.com/sub?token=abc'
-
-# 使用镜像后端并附加参数
-./Script/gen_convert_url.sh -b mirror -u 'https://example.com/sub?token=abc' -p 'emoji=true' -p 'udp=true'
-
-# 使用自定义后端 + 远程模板，保存为自定义文件名
-./Script/gen_convert_url.sh -b 'https://your-backend.example.com' -u 'https://example.com/sub?token=abc' -c 'https://raw.githubusercontent.com/xxx/rules.ini' -f 'my-config.yaml'
-```
-
-脚本会自动下载配置文件并保存到项目根目录，同时输出转换链接和保存路径供参考。
-
-## systemd 服务安装脚本
-
-`Script/setup_mihomo_service.sh` 用于把 Mihomo 安装为系统服务（systemd）。
-
-默认行为：
-
-- 使用 `../mihomo` 作为可执行文件
-- 使用项目根目录作为工作目录（要求存在 `config.yaml`）
-- 写入 `/etc/systemd/system/mihomo.service`
-- 执行 `daemon-reload` + `enable` + `restart`
-
-示例：
-
-```bash
-# 一键安装并启动
-sudo ./Script/setup_mihomo_service.sh
-
-# 仅设置开机自启，不立即启动
-sudo ./Script/setup_mihomo_service.sh --no-start
-
-# 自定义服务名
-sudo ./Script/setup_mihomo_service.sh -n mihomo-main
-```
-
-常用管理命令：
-
-```bash
-sudo systemctl status mihomo
-sudo systemctl restart mihomo
-sudo systemctl stop mihomo
-sudo journalctl -u mihomo -f
-```
-
-## 官方资源一键更新脚本
-
-`Script/update_core_assets.sh` 会从官方仓库自动下载并部署以下内容：
-
-- `country.mmdb`、`geoip.metadb`：来自 `MetaCubeX/meta-rules-dat`
-- `mihomo`：来自 `MetaCubeX/mihomo` 最新发布
-- `ui`：来自 `MetaCubeX/metacubexd` 最新发布
-
-脚本行为：
-
-- 所有下载文件先保存到 `source/downloads/`
-- 自动解压并移动到根目录对应位置：
-  - `country.mmdb`
-  - `geoip.metadb`
-  - `mihomo`
-  - `ui/`
-
-使用方式：
-
-```bash
-./Script/update_core_assets.sh
-```
-
-建议更新后检查：
-
-```bash
-./mihomo -v
-ls -lah ui | head
-```
-
-## 完整启动流程（从零开始）
+## 🚀 快速开始（从零开始）
 
 ### 第一步：下载核心文件
 
@@ -293,3 +129,172 @@ sudo journalctl -u mihomo -f
 ```
 
 > **注意**：如果启用了 TUN 模式，需要 root 权限才能正常接管网络流量，建议使用 systemd 服务以 root 身份运行。
+
+---
+
+## 📜 脚本详解
+
+### 官方资源一键更新脚本
+
+`Script/update_core_assets.sh` 会从官方仓库自动下载并部署以下内容：
+
+- `country.mmdb`、`geoip.metadb`：来自 `MetaCubeX/meta-rules-dat`
+- `mihomo`：来自 `MetaCubeX/mihomo` 最新发布
+- `ui`：来自 `MetaCubeX/metacubexd` 最新发布
+
+脚本行为：
+
+- 所有下载文件先保存到 `source/downloads/`
+- 自动解压并移动到根目录对应位置：
+  - `country.mmdb`
+  - `geoip.metadb`
+  - `mihomo`
+  - `ui/`
+
+使用方式：
+
+```bash
+./Script/update_core_assets.sh
+```
+
+建议更新后检查：
+
+```bash
+./mihomo -v
+ls -lah ui | head
+```
+
+### 订阅转换链接生成脚本
+
+`Script/gen_convert_url.sh` 自动生成转换链接并直接下载保存配置文件。
+
+支持功能：
+
+- 官方后端：`https://sub.fndroid.com`
+- 镜像（肥羊）后端：`https://api.v1.mk`
+- 自定义后端地址
+- 附加任意参数（如 `emoji=true`、`udp=true` 等）
+- 自定义文件名和远程配置模板
+
+参数说明：
+- `-u, --url <url>`：原始订阅链接（必填）
+- `-b, --backend <name|url>`：后端选择，可选 `official` | `mirror` | 自定义 URL（默认：official）
+- `-t, --target <target>`：转换目标格式（默认：clash）
+- `-c, --config <url>`：远程配置模板 URL（可选）
+- `-f, --filename <name>`：保存文件名（默认：config.yaml）
+- `-p, --param <k=v>`：追加自定义参数（可重复）
+
+使用示例：
+
+```bash
+# 使用官方后端，保存为 config.yaml（最简单）
+./Script/gen_convert_url.sh -u 'https://example.com/sub?token=abc'
+
+# 使用镜像后端并附加参数
+./Script/gen_convert_url.sh -b mirror -u 'https://example.com/sub?token=abc' -p 'emoji=true' -p 'udp=true'
+
+# 使用自定义后端 + 远程模板，保存为自定义文件名
+./Script/gen_convert_url.sh -b 'https://your-backend.example.com' -u 'https://example.com/sub?token=abc' -c 'https://raw.githubusercontent.com/xxx/rules.ini' -f 'my-config.yaml'
+```
+
+脚本会自动下载配置文件并保存到项目根目录，同时输出转换链接和保存路径供参考。
+
+### systemd 服务安装脚本
+
+`Script/setup_mihomo_service.sh` 用于把 Mihomo 安装为系统服务（systemd）。
+
+默认行为：
+
+- 使用 `../mihomo` 作为可执行文件
+- 使用项目根目录作为工作目录（要求存在 `config.yaml`）
+- 写入 `/etc/systemd/system/mihomo.service`
+- 执行 `daemon-reload` + `enable` + `restart`
+
+使用示例：
+
+```bash
+# 一键安装并启动
+sudo ./Script/setup_mihomo_service.sh
+
+# 仅设置开机自启，不立即启动
+sudo ./Script/setup_mihomo_service.sh --no-start
+
+# 自定义服务名
+sudo ./Script/setup_mihomo_service.sh -n mihomo-main
+```
+
+常用管理命令：
+
+```bash
+sudo systemctl status mihomo
+sudo systemctl restart mihomo
+sudo systemctl stop mihomo
+sudo journalctl -u mihomo -f
+```
+
+---
+
+## ⚙️ 配置进阶
+
+### 配置来源约定
+
+`config.yaml` 中大部分内容来自"订阅链接 -> 后端转换"的自动生成结果，主要包括：
+
+- `proxies`
+- `proxy-groups`
+- `rules`（如果转换模板包含）
+
+这些自动生成段在每次重新转换并覆盖配置时可能变化。
+
+### 手动维护区（建议保留）
+
+在配置顶部手动维护的关键项（转换后需要重新添加）：
+
+```yaml
+# 控制面板设置
+external-controller: 0.0.0.0:9090
+external-ui: ui
+secret: ""  # 可选：面板访问密码
+
+# TUN 强化配置 (推荐)
+tun:
+  enable: true
+  stack: gvisor
+  auto-route: true
+  auto-detect-interface: true
+  mtu: 1500
+  strict-route: true
+  dns-hijack:
+    - any:53
+    - tcp://any:53
+
+# DNS 配置
+dns:
+  enable: true
+  enhanced-mode: fake-ip
+```
+
+> 建议把这段视为"本地定制区"，每次用订阅重新生成后都检查是否仍在。
+
+### 推荐更新流程（避免手动项被覆盖）
+
+1. 通过订阅链接使用后端转换生成新配置。
+2. 覆盖更新 `config.yaml`。
+3. 对照本 README，将"手动维护区"补回（尤其是 `tun`、`external-controller`、`external-ui`）。
+4. 启动 Mihomo 并检查日志是否正常。
+
+---
+
+## 🔧 故障排除
+
+### 快速检查项
+
+- 面板端口是否可访问：`9090`
+- UI 目录是否存在：`ui/`
+- DNS 劫持是否启用：`tun.dns-hijack`
+- 规则模式是否符合预期：`mode: Rule`
+
+### 常见问题
+
+- 若系统 DNS/网络管理器与 TUN 冲突，优先检查系统 DNS 服务设置（如 `systemd-resolved`）与防火墙转发规则。
+- 若测速或连通性异常，可先临时切换 `proxy-groups` 到单节点排查。
