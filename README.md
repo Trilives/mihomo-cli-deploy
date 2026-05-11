@@ -116,7 +116,7 @@ http://localhost:9090
 - UI 文件位于本地 `ui/` 目录中
 - 首次打开可能需要稍等，让 Mihomo 加载完成
 
-**局域网访问（如果 `external-controller` 配置为 `0.0.0.0:9090`）：**
+**局域网访问：**
 
 如果在 `config.yaml` 中配置了 `external-controller: 0.0.0.0:9090`，则该设备的局域网内其他主机也可以访问：
 
