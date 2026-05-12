@@ -189,6 +189,18 @@ sudo journalctl -u mihomo -f
 
 > **注意**：如果启用了 TUN 模式，需要 root 权限才能正常接管网络流量，建议使用 systemd 服务以 root 身份运行。
 
+> **虚拟内网配置提示**（Tailscale 等）：如在配置 Tailscale 等虚拟内网时，应先关闭 Mihomo 服务，待 Tailscale 登录完成并获得内网 IP 后，再启动 Mihomo 服务。这样可以避免 TUN 模式与虚拟内网的冲突：
+> ```bash
+> # 关闭 Mihomo 服务
+> sudo systemctl stop mihomo
+> 
+> # 登录 Tailscale 并获得内网 IP
+> sudo tailscale up
+> 
+> # 登录完成后重启 Mihomo
+> sudo systemctl start mihomo
+> ```
+
 ---
 
 ## 📜 脚本详解
