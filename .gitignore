@@ -16,6 +16,11 @@ country.mmdb
 geoip.metadb
 geoip.dat
 GeoSite.dat
+ASN.mmdb
+GeoIP.dat
+
+# Rule sets
+ruleset/
 
 # Local backups / temp files
 backups/
@@ -28,5 +33,6 @@ config.yaml.bak.*
 .DS_Store
 Thumbs.db
 
-ui
-config.yaml
+# Duplicate entries (already covered above)
+# ui
+# config.yaml
