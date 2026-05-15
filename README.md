@@ -81,27 +81,63 @@ secret: ""  # 可选：设置访问密码
 # 代理模式
 mode: Rule
 
-# TUN 配置（可选但推荐）
+# TUN 配置（推荐启用，Ubuntu 优化版）
 tun:
   enable: true
-  stack: gvisor
+  stack: gvisor             # Ubuntu 必须用 gvisor（mixed/system 无法转发 TCP）
   auto-route: true
   auto-detect-interface: true
+  mtu: 1500                 # 标准 MTU，兼容性最好
   dns-hijack:
     - any:53
     - tcp://any:53
 
-# DNS 配置
+# DNS 配置（Ubuntu 优化版）
 dns:
   enable: true
+  ipv6: false
   enhanced-mode: fake-ip
-  listen: 0.0.0.0:53
+  listen: 0.0.0.0:1053      # Linux 必须用 1053 避免与 systemd-resolved 冲突
+  fake-ip-range: 198.18.0.1/16
+  
+  # Ubuntu 系统域名白名单（避免系统更新被 fake-ip 影响）
+  fake-ip-filter:
+    - '*.lan'
+    - '*.local'
+    - '+.ubuntu.com'
+    - '+.debian.org'
+    - 'pool.ntp.org'
+    - '+.ntp.org'
+  
+  # 自举 DNS（用于解析 DoH 服务器域名）
   default-nameserver:
-    - 8.8.8.8
-    - 1.1.1.1
+    - 223.5.5.5
+    - 119.29.29.29
+    - 114.114.114.114
+  
+  # 主 DNS（国内域名）
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+    - 223.5.5.5              # 备用纯 UDP DNS
+  
+  # 备用 DNS（国外域名，防污染）
+  fallback:
+    - https://1.1.1.1/dns-query
+    - https://dns.google/dns-query
+    - tls://8.8.8.8:853      # DoT 协议备用
+  
+  # 智能分流
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
 ```
 
-> **⚠️ Linux 用户注意**：DNS 监听端口 53 可能与系统 DNS 服务（如 `systemd-resolved`）冲突。建议改为 `listen: 0.0.0.0:1053`。
+> **⚠️ Ubuntu 用户重要提示**：
+> - DNS 监听端口**必须**使用 `1053`，不能用 `53`（会与 `systemd-resolved` 冲突）
+> - TUN stack **必须**使用 `gvisor`（`mixed` 和 `system` 存在 TCP 转发缺陷，会导致网络完全不可用）
+> - MTU 使用标准值 `1500`（更高的值可能导致兼容性问题）
+> - 必须添加 `+.ubuntu.com` 和 `+.debian.org` 到 fake-ip-filter（避免系统更新失败）
 
 ### 第四步：测试启动
 
@@ -345,31 +381,66 @@ external-controller: 0.0.0.0:9090
 external-ui: ui
 secret: ""  # 可选：面板访问密码
 
-# TUN 强化配置 (推荐)
+# TUN 强化配置（Ubuntu 优化版）
 tun:
   enable: true
-  stack: gvisor
+  stack: gvisor             # Ubuntu 必须用 gvisor（mixed/system 无法转发 TCP）
   auto-route: true
   auto-detect-interface: true
-  mtu: 1500
-  strict-route: true
+  mtu: 1500                 # 标准 MTU，兼容性最好
   dns-hijack:
     - any:53
     - tcp://any:53
 
-# DNS 配置
+# DNS 配置（Ubuntu 优化版）
 dns:
   enable: true
+  ipv6: false
   enhanced-mode: fake-ip
-  listen: 0.0.0.0:1053  # Linux 推荐用 1053 避免与系统 DNS 冲突
+  listen: 0.0.0.0:1053      # Linux 必须用 1053 避免与 systemd-resolved 冲突
+  fake-ip-range: 198.18.0.1/16
+  
+  # Ubuntu 系统域名白名单
+  fake-ip-filter:
+    - '*.lan'
+    - '*.local'
+    - '+.ubuntu.com'        # Ubuntu 系统更新源
+    - '+.debian.org'        # Debian 软件源
+    - 'pool.ntp.org'
+    - '+.ntp.org'
+  
+  # 自举 DNS
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+    - 114.114.114.114
+  
+  # 主 DNS（国内域名）
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+    - 223.5.5.5              # 备用纯 UDP DNS
+  
+  # 备用 DNS（国外域名）
+  fallback:
+    - https://1.1.1.1/dns-query
+    - https://dns.google/dns-query
+    - tls://8.8.8.8:853      # DoT 协议备用
+  
+  # 智能分流
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
 ```
 
 > 建议把这段视为"本地定制区"，每次用订阅重新生成后都检查是否仍在。
 > 
-> **DNS 端口说明**：
-> - **Linux**：推荐使用 `1053` 替代 `53`，避免与 `systemd-resolved` 等系统 DNS 服务冲突
-> - **macOS/Windows**：可使用 `53`，但需要 root/管理员权限
-> - 启用 TUN 模式时，DNS 会通过劫持规则自动转发，端口冲突影响较小
+> **Ubuntu 系统特别说明**：
+> - **DNS 端口**：必须使用 `1053`，不能用 `53`（会与 `systemd-resolved` 冲突导致网络故障）
+> - **TUN stack**：**必须**使用 `gvisor`（`mixed` 和 `system` 存在 TCP 转发缺陷，会导致网络完全不可用）
+> - **MTU**：使用标准值 `1500`（更高的值可能导致兼容性问题）
+> - **fake-ip-filter**：必须添加 Ubuntu/Debian 域名，否则 `apt update` 等系统命令会失败
+> - **多层 DNS 备份**：DoH → DoT → UDP 三层备份，确保至少一种方式能工作
 
 ### 推荐更新流程（避免手动项被覆盖）
 
@@ -389,7 +460,116 @@ dns:
 - DNS 劫持是否启用：`tun.dns-hijack`
 - 规则模式是否符合预期：`mode: Rule`
 
+### Ubuntu 系统常见问题
+
+#### 1. DNS 端口冲突（最常见）
+
+**症状**：启动 mihomo 后提示 `bind: address already in use` 或网络完全断开
+
+**原因**：`systemd-resolved` 占用了 53 端口
+
+**解决方案**：
+```bash
+# 方案 A：修改 config.yaml 中 DNS 监听端口（推荐）
+# 将 listen: 0.0.0.0:53 改为 listen: 0.0.0.0:1053
+
+# 方案 B：禁用 systemd-resolved（不推荐，可能影响系统）
+sudo systemctl disable systemd-resolved
+sudo systemctl stop systemd-resolved
+```
+
+#### 2. TUN 模式网络完全不可用（关键问题）
+
+**症状**：启动 mihomo 后所有网络访问失败，包括百度等国内网站，关闭服务后恢复正常
+
+**原因**：`mixed` 和 `system` 两种 TUN stack 存在 TCP 转发缺陷
+- TUN 设备创建正常，路由表配置正确
+- DNS 解析工作正常（fake-ip）
+- ICMP 流量可以通过（ping 成功）
+- **但 TCP 连接无法建立**（HTTP/HTTPS 请求全部超时）
+
+**解决方案**：
+```yaml
+# 修改 config.yaml 中 TUN stack 为 gvisor
+tun:
+  stack: gvisor  # 必须使用 gvisor，mixed/system 无法转发 TCP
+  mtu: 1500      # 使用标准 MTU
+```
+
+**诊断方法**：
+```bash
+# 启动服务后测试
+sudo systemctl start mihomo
+sleep 3
+
+# 1. 检查 TUN 设备（应该存在）
+ip link show | grep Meta
+
+# 2. 测试 ICMP（应该成功）
+ping -c 2 198.18.0.5
+
+# 3. 测试 TCP（如果失败说明是 stack 问题）
+curl -I http://www.baidu.com
+
+# 如果 ping 通但 curl 超时，说明 TCP 转发失败，需要切换到 gvisor
+```
+
+#### 3. 系统更新失败（apt update 报错）
+
+**症状**：运行 `sudo apt update` 时提示无法解析域名或连接超时
+
+**原因**：Ubuntu 系统域名被 fake-ip 劫持
+
+**解决方案**：
+```yaml
+# 在 config.yaml 的 fake-ip-filter 中添加
+dns:
+  fake-ip-filter:
+    - '+.ubuntu.com'
+    - '+.debian.org'
+```
+
+#### 4. 服务启动失败（权限问题）
+
+**症状**：systemd 服务无法启动，日志显示权限错误
+
+**原因**：TUN 模式需要 root 权限
+
+**解决方案**：
+```bash
+# 确保服务以 root 身份运行
+sudo ./Script/setup_mihomo_service.sh
+
+# 检查服务配置
+sudo systemctl cat mihomo | grep User
+# 应该显示 User=root
+```
+
 ### 常见问题
 
 - 若系统 DNS/网络管理器与 TUN 冲突，优先检查系统 DNS 服务设置（如 `systemd-resolved`）与防火墙转发规则。
 - 若测速或连通性异常，可先临时切换 `proxy-groups` 到单节点排查。
+- 若 Tailscale 等虚拟内网无法访问，参考"第六步"中的虚拟内网配置提示。
+
+### 调试命令
+
+```bash
+# 查看服务状态
+sudo systemctl status mihomo
+
+# 查看实时日志
+sudo journalctl -u mihomo -f
+
+# 检查 DNS 端口占用
+sudo ss -tulnp | grep :53
+sudo ss -tulnp | grep :1053
+
+# 检查路由表
+ip route show
+
+# 测试 DNS 解析
+nslookup google.com 127.0.0.1:1053
+
+# 检查 TUN 设备
+ip link show | grep tun
+```
