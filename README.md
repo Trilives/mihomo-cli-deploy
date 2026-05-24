@@ -92,15 +92,51 @@ tun:
     - any:53
     - tcp://any:53
 
-# DNS 配置（Ubuntu 优化版）
+# DNS 配置（普通解析，当前更推荐）
+dns:
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:53        # 若 53 被 systemd-resolved 占用，改为 0.0.0.0:1053
+
+  # 兼容性过滤列表：保留给订阅或特殊服务使用，不启用 fake-ip 时通常不会生效
+  fake-ip-filter:
+    - "*.lan"
+    - "*.srv.nintendo.net"
+    - "*.stun.playstation.net"
+    - xbox.*.microsoft.com
+    - "*.xboxlive.com"
+    - "*.teafone.com"
+    - "*.sktswe.net"
+    - rtc.goodfone.co.kr
+    - "*.chattti.com"
+
+  # 主 DNS：优先使用国内低延迟解析，DoT 作为加密备用
+  nameserver:
+    - 119.29.29.29
+    - 223.5.5.5
+    - tls://223.5.5.5:853
+    - tls://223.6.6.6:853
+    - tls://120.53.53.53
+    - tls://1.12.12.12
+```
+
+> **⚠️ Ubuntu 用户重要提示**：
+> - DNS 监听端口优先按当前系统选择：若 `53` 未被占用，可用 `0.0.0.0:53`；若与 `systemd-resolved` 冲突，则改为 `0.0.0.0:1053`
+> - TUN stack **必须**使用 `gvisor`（`mixed` 和 `system` 存在 TCP 转发缺陷，会导致网络完全不可用）
+> - MTU 使用标准值 `1500`（更高的值可能导致兼容性问题）
+> - 当前不建议主动启用 `enhanced-mode: fake-ip`；普通解析在本环境下更快，也更少影响系统更新、内网和部分直连服务
+
+如普通解析遇到严重污染、分流异常或特定应用必须依赖 fake-ip 行为，可以把 DNS 段切换为下面的备选方案：
+
+```yaml
+# DNS 配置（fake-ip 备选方案）
 dns:
   enable: true
   ipv6: false
   enhanced-mode: fake-ip
-  listen: 0.0.0.0:1053      # Linux 必须用 1053 避免与 systemd-resolved 冲突
+  listen: 0.0.0.0:1053      # 若 53 被占用，使用 1053 避免与 systemd-resolved 冲突
   fake-ip-range: 198.18.0.1/16
-  
-  # Ubuntu 系统域名白名单（避免系统更新被 fake-ip 影响）
+
   fake-ip-filter:
     - '*.lan'
     - '*.local'
@@ -108,36 +144,26 @@ dns:
     - '+.debian.org'
     - 'pool.ntp.org'
     - '+.ntp.org'
-  
-  # 自举 DNS（用于解析 DoH 服务器域名）
+
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
     - 114.114.114.114
-  
-  # 主 DNS（国内域名）
+
   nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
-    - 223.5.5.5              # 备用纯 UDP DNS
-  
-  # 备用 DNS（国外域名，防污染）
+    - 223.5.5.5
+
   fallback:
     - https://1.1.1.1/dns-query
     - https://dns.google/dns-query
-    - tls://8.8.8.8:853      # DoT 协议备用
-  
-  # 智能分流
+    - tls://8.8.8.8:853
+
   fallback-filter:
     geoip: true
     geoip-code: CN
 ```
-
-> **⚠️ Ubuntu 用户重要提示**：
-> - DNS 监听端口**必须**使用 `1053`，不能用 `53`（会与 `systemd-resolved` 冲突）
-> - TUN stack **必须**使用 `gvisor`（`mixed` 和 `system` 存在 TCP 转发缺陷，会导致网络完全不可用）
-> - MTU 使用标准值 `1500`（更高的值可能导致兼容性问题）
-> - 必须添加 `+.ubuntu.com` 和 `+.debian.org` 到 fake-ip-filter（避免系统更新失败）
 
 ### 第四步：测试启动
 
@@ -229,10 +255,10 @@ sudo journalctl -u mihomo -f
 > ```bash
 > # 关闭 Mihomo 服务
 > sudo systemctl stop mihomo
-> 
+>
 > # 登录 Tailscale 并获得内网 IP
 > sudo tailscale up
-> 
+>
 > # 登录完成后重启 Mihomo
 > sudo systemctl start mihomo
 > ```
@@ -392,55 +418,81 @@ tun:
     - any:53
     - tcp://any:53
 
-# DNS 配置（Ubuntu 优化版）
+# DNS 配置（普通解析，当前更推荐）
+dns:
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:53        # 若 53 被 systemd-resolved 占用，改为 0.0.0.0:1053
+
+  # 兼容性过滤列表：保留给订阅或特殊服务使用，不启用 fake-ip 时通常不会生效
+  fake-ip-filter:
+    - "*.lan"
+    - "*.srv.nintendo.net"
+    - "*.stun.playstation.net"
+    - xbox.*.microsoft.com
+    - "*.xboxlive.com"
+    - "*.teafone.com"
+    - "*.sktswe.net"
+    - rtc.goodfone.co.kr
+    - "*.chattti.com"
+
+  # 主 DNS：优先使用国内低延迟解析，DoT 作为加密备用
+  nameserver:
+    - 119.29.29.29
+    - 223.5.5.5
+    - tls://223.5.5.5:853
+    - tls://223.6.6.6:853
+    - tls://120.53.53.53
+    - tls://1.12.12.12
+```
+
+> 建议把这段视为"本地定制区"，每次用订阅重新生成后都检查是否仍在。
+> **Ubuntu 系统特别说明**：
+> - **DNS 端口**：如果 `53` 未被占用可以直接使用；如果与 `systemd-resolved` 冲突，再改为 `1053`
+> - **TUN stack**：**必须**使用 `gvisor`（`mixed` 和 `system` 存在 TCP 转发缺陷，会导致网络完全不可用）
+> - **MTU**：使用标准值 `1500`（更高的值可能导致兼容性问题）
+> - **DNS 模式**：当前不建议主动启用 `enhanced-mode: fake-ip`，普通解析更贴近系统真实 DNS 行为
+> - **DNS 备份**：保留多个国内 DNS 和 DoT 备用，确保至少一种方式能工作
+
+#### DNS 备选方案：fake-ip
+
+普通解析作为当前推荐方案；如果遇到 DNS 污染明显、规则分流不准、或某些应用在普通解析下表现异常，可以临时切换回下面的 `fake-ip` 方案对比：
+
+```yaml
 dns:
   enable: true
   ipv6: false
   enhanced-mode: fake-ip
-  listen: 0.0.0.0:1053      # Linux 必须用 1053 避免与 systemd-resolved 冲突
+  listen: 0.0.0.0:1053
   fake-ip-range: 198.18.0.1/16
-  
-  # Ubuntu 系统域名白名单
+
   fake-ip-filter:
     - '*.lan'
     - '*.local'
-    - '+.ubuntu.com'        # Ubuntu 系统更新源
-    - '+.debian.org'        # Debian 软件源
+    - '+.ubuntu.com'
+    - '+.debian.org'
     - 'pool.ntp.org'
     - '+.ntp.org'
-  
-  # 自举 DNS
+
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
     - 114.114.114.114
-  
-  # 主 DNS（国内域名）
+
   nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
-    - 223.5.5.5              # 备用纯 UDP DNS
-  
-  # 备用 DNS（国外域名）
+    - 223.5.5.5
+
   fallback:
     - https://1.1.1.1/dns-query
     - https://dns.google/dns-query
-    - tls://8.8.8.8:853      # DoT 协议备用
-  
-  # 智能分流
+    - tls://8.8.8.8:853
+
   fallback-filter:
     geoip: true
     geoip-code: CN
 ```
-
-> 建议把这段视为"本地定制区"，每次用订阅重新生成后都检查是否仍在。
-> 
-> **Ubuntu 系统特别说明**：
-> - **DNS 端口**：必须使用 `1053`，不能用 `53`（会与 `systemd-resolved` 冲突导致网络故障）
-> - **TUN stack**：**必须**使用 `gvisor`（`mixed` 和 `system` 存在 TCP 转发缺陷，会导致网络完全不可用）
-> - **MTU**：使用标准值 `1500`（更高的值可能导致兼容性问题）
-> - **fake-ip-filter**：必须添加 Ubuntu/Debian 域名，否则 `apt update` 等系统命令会失败
-> - **多层 DNS 备份**：DoH → DoT → UDP 三层备份，确保至少一种方式能工作
 
 ### 推荐更新流程（避免手动项被覆盖）
 
@@ -484,7 +536,7 @@ sudo systemctl stop systemd-resolved
 
 **原因**：`mixed` 和 `system` 两种 TUN stack 存在 TCP 转发缺陷
 - TUN 设备创建正常，路由表配置正确
-- DNS 解析工作正常（fake-ip）
+- DNS 解析工作正常（普通解析）
 - ICMP 流量可以通过（ping 成功）
 - **但 TCP 连接无法建立**（HTTP/HTTPS 请求全部超时）
 
@@ -506,7 +558,7 @@ sleep 3
 ip link show | grep Meta
 
 # 2. 测试 ICMP（应该成功）
-ping -c 2 198.18.0.5
+ping -c 2 223.5.5.5
 
 # 3. 测试 TCP（如果失败说明是 stack 问题）
 curl -I http://www.baidu.com
@@ -518,15 +570,19 @@ curl -I http://www.baidu.com
 
 **症状**：运行 `sudo apt update` 时提示无法解析域名或连接超时
 
-**原因**：Ubuntu 系统域名被 fake-ip 劫持
+**原因**：常见原因是 DNS 端口冲突、上游 DNS 不可用，或启用了 `enhanced-mode: fake-ip` 后系统域名被 fake-ip 影响
 
 **解决方案**：
 ```yaml
-# 在 config.yaml 的 fake-ip-filter 中添加
+# 推荐先使用普通解析，不主动启用 enhanced-mode: fake-ip
 dns:
-  fake-ip-filter:
-    - '+.ubuntu.com'
-    - '+.debian.org'
+  enable: true
+  ipv6: false
+  listen: 0.0.0.0:53  # 若 53 冲突则改为 0.0.0.0:1053
+  nameserver:
+    - 119.29.29.29
+    - 223.5.5.5
+    - tls://223.5.5.5:853
 ```
 
 #### 4. 服务启动失败（权限问题）
@@ -550,6 +606,7 @@ sudo systemctl cat mihomo | grep User
 - 若系统 DNS/网络管理器与 TUN 冲突，优先检查系统 DNS 服务设置（如 `systemd-resolved`）与防火墙转发规则。
 - 若测速或连通性异常，可先临时切换 `proxy-groups` 到单节点排查。
 - 若 Tailscale 等虚拟内网无法访问，参考"第六步"中的虚拟内网配置提示。
+- 当前 DNS 写法的主要隐患：普通 UDP DNS 可能被运营商劫持或污染；未配置国外 fallback 时，部分境外域名解析质量依赖当前上游；监听 `0.0.0.0:53` 时如果开放到局域网，需要注意不要暴露成不受控的 DNS 服务。
 
 ### 调试命令
 
@@ -568,7 +625,7 @@ sudo ss -tulnp | grep :1053
 ip route show
 
 # 测试 DNS 解析
-nslookup google.com 127.0.0.1:1053
+nslookup google.com 127.0.0.1
 
 # 检查 TUN 设备
 ip link show | grep tun
