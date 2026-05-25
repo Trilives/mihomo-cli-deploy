@@ -11,7 +11,8 @@
 - `source/downloads/`：sing-box core 和 Web UI 下载缓存
 - `Script/update_sing_box_core.sh`：下载并更新 sing-box core 和 Web UI
 - `Script/setup_sing_box_service.sh`：注册或删除 sing-box systemd 服务
-- `Script/Enhance/convert_mihomo_config.py`：把根目录 Mihomo `config.yaml` 转成 sing-box `config.json`
+- `Script/download_sing_box_subscription.sh`：通过 subconverter 后端把订阅转换为 sing-box `config.json`
+- `Script/Enhance/convert_mihomo_config.py`：本地兜底转换，把根目录 Mihomo `config.yaml` 转成 sing-box `config.json`
 
 ## 快速开始
 
@@ -27,7 +28,31 @@ chmod +x ./sing_box/Script/*.sh ./sing_box/Script/Enhance/*.py
 ./sing_box/Script/update_sing_box_core.sh
 ```
 
-转换当前 Mihomo 配置：
+通过 subconverter 后端转换订阅，默认输出到 `sing_box/config.json`：
+
+```bash
+./sing_box/Script/download_sing_box_subscription.sh -u 'https://your-subscribe-link'
+```
+
+如果手上已经有完整的官方转换链接（例如 `.../sub?target=clash&url=...`），可以直接传入，脚本会自动把 `target` 改成 `singbox`：
+
+```bash
+./sing_box/Script/download_sing_box_subscription.sh --converted-url 'https://your-backend/sub?target=clash&url=...'
+```
+
+如果你有自建 subconverter，建议使用自建后端：
+
+```bash
+./sing_box/Script/download_sing_box_subscription.sh -b 'http://127.0.0.1:25500' -u 'https://your-subscribe-link'
+```
+
+也可以追加 subconverter 参数：
+
+```bash
+./sing_box/Script/download_sing_box_subscription.sh -u 'https://your-subscribe-link' -p 'udp=true' -p 'emoji=true'
+```
+
+本地兜底转换当前 Mihomo 配置：
 
 ```bash
 ./sing_box/Script/Enhance/convert_mihomo_config.py
@@ -47,7 +72,7 @@ chmod +x ./sing_box/Script/*.sh ./sing_box/Script/Enhance/*.py
 
 ## 系统服务
 
-注册为 systemd 服务并立即启动：
+注册为 systemd 服务并立即启动（会把当前 `sing_box/config.json` 复制到 `/etc/sing-box/<service>.json` 作为服务运行配置）：
 
 ```bash
 sudo ./sing_box/Script/setup_sing_box_service.sh
@@ -80,7 +105,7 @@ sudo ./sing_box/Script/setup_sing_box_service.sh -n sing-box-main --remove
 
 ## Web UI
 
-转换脚本会把根目录 `config.yaml` 中的 `external-controller` 和 `external-ui` 转成 sing-box 的 `experimental.clash_api` 配置。
+后端转换得到的配置不一定包含 Web UI 设置。需要局域网访问 UI 时，确认 `sing_box/config.json` 中包含 `experimental.clash_api`。
 
 局域网访问通常需要：
 
@@ -106,6 +131,8 @@ http://<LAN-IP>:9090/ui
 
 ## 注意事项
 
-- 转换脚本优先支持当前仓库实际使用的 Mihomo 配置结构：`ss` 节点、`select` 分组、常见 Clash 规则、DNS、TUN 和 Clash API。
+- 默认推荐使用 `Script/download_sing_box_subscription.sh` 走 subconverter 后端生成 sing-box 配置。
+- `https://sub-web.wcc.best` 和 `https://sublink.dev` 是前端页面，不一定能直接作为脚本 API 后端；脚本需要真实的 subconverter 后端，例如自建 `http://127.0.0.1:25500`。
+- 本地 Python 转换脚本只是兜底方案，优先支持当前仓库实际使用的 Mihomo 配置结构：`ss` 节点、`select` 分组、常见 Clash 规则、DNS、TUN 和 Clash API。
 - 生成的 `sing_box/config.json` 包含节点信息，已在根目录 `.gitignore` 中忽略。
 - `sing_box/ui/`、`sing_box/sing-box`、`sing_box/source/downloads/` 都是生成产物，已忽略。

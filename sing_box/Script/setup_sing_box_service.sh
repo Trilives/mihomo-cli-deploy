@@ -95,6 +95,9 @@ if ! command -v systemctl >/dev/null 2>&1; then
 fi
 
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+SYSTEM_CONFIG_DIR="/etc/sing-box"
+SYSTEM_CONFIG_PATH="${SYSTEM_CONFIG_DIR}/${SERVICE_NAME}.json"
+SYSTEM_CACHE_PATH="${SYSTEM_CONFIG_DIR}/${SERVICE_NAME}.cache.db"
 
 remove_service() {
   if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
@@ -134,7 +137,70 @@ if [[ ! -d "${WORK_DIR}" ]]; then
   exit 1
 fi
 
+BIN_PATH="$(realpath "${BIN_PATH}")"
+CONFIG_PATH="$(realpath "${CONFIG_PATH}")"
+WORK_DIR="$(realpath "${WORK_DIR}")"
+
+if ! id "${RUN_USER}" >/dev/null 2>&1; then
+  echo "Error: run user does not exist: ${RUN_USER}" >&2
+  exit 1
+fi
+
+check_run_user_access() {
+  local test_expr="$1"
+  local path="$2"
+  local description="$3"
+  local current_user="${SUDO_USER:-$(id -un)}"
+
+  if ! runuser -u "${RUN_USER}" -- test "${test_expr}" "${path}"; then
+    cat >&2 <<EOF
+Error: ${description} is not accessible by service user '${RUN_USER}': ${path}
+
+Hint:
+  - Use the default root user for TUN mode, or pass '-u ${current_user}' if you want to run as your current user.
+  - If the config is under /home, every parent directory must be executable by '${RUN_USER}'.
+EOF
+    exit 1
+  fi
+}
+
+check_run_user_access -x "${BIN_PATH}" "sing-box executable"
+check_run_user_access -r "${CONFIG_PATH}" "sing-box config"
+check_run_user_access -x "${WORK_DIR}" "working directory"
+
 "${BIN_PATH}" check -c "${CONFIG_PATH}"
+
+mkdir -p "${SYSTEM_CONFIG_DIR}"
+install -o root -g root -m 0644 "${CONFIG_PATH}" "${SYSTEM_CONFIG_PATH}"
+echo "Installed runtime config: ${SYSTEM_CONFIG_PATH}"
+
+python3 - <<PY
+import json
+from pathlib import Path
+
+config_path = Path("${SYSTEM_CONFIG_PATH}")
+cache_path = Path("${SYSTEM_CACHE_PATH}")
+
+data = json.loads(config_path.read_text(encoding="utf-8"))
+experimental = data.get("experimental") or {}
+cache_file = experimental.get("cache_file") or {}
+cache_file["enabled"] = True
+cache_file["path"] = str(cache_path)
+experimental["cache_file"] = cache_file
+data["experimental"] = experimental
+
+config_path.write_text(
+    json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
+
+if [[ "${RUN_USER}" == "root" ]]; then
+  install -o root -g root -m 0644 /dev/null "${SYSTEM_CACHE_PATH}"
+else
+  install -o "${RUN_USER}" -g "${RUN_USER}" -m 0644 /dev/null "${SYSTEM_CACHE_PATH}"
+fi
+echo "Prepared cache file: ${SYSTEM_CACHE_PATH}"
 
 cat > "${SERVICE_FILE}" <<EOF
 [Unit]
@@ -147,7 +213,7 @@ Wants=network-online.target
 Type=simple
 User=${RUN_USER}
 WorkingDirectory=${WORK_DIR}
-ExecStart=${BIN_PATH} run -c ${CONFIG_PATH}
+ExecStart=${BIN_PATH} run -c ${SYSTEM_CONFIG_PATH}
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
