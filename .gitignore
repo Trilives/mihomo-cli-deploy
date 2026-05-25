@@ -1,6 +1,10 @@
 # Runtime files
 .run/
 cache.db
+config.yaml
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
 
 # Download cache / archives
 source/downloads/
@@ -8,9 +12,18 @@ source/*.zip
 source/*.tar.gz
 source/*.tgz
 source/*.gz
+sing_box/source/downloads/
+sing_box/source/*.zip
+sing_box/source/*.tar.gz
+sing_box/source/*.tgz
+sing_box/source/*.gz
 
 # Upstream downloadable assets (large binaries)
 mihomo
+sing_box/sing-box
+sing_box/sing-box.version
+sing_box/config.json
+sing_box/ui/
 ui/
 country.mmdb
 geoip.metadb
@@ -35,4 +48,3 @@ Thumbs.db
 
 # Duplicate entries (already covered above)
 # ui
-# config.yaml
