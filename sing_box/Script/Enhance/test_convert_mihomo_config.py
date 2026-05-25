@@ -49,7 +49,7 @@ class ConvertMihomoConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(skipped, [])
-        self.assertEqual(route["rules"][2]["rule_set"], ["geoip-cn"])
+        self.assertEqual(route["rules"][3]["rule_set"], ["geoip-cn"])
         self.assertEqual(route["rule_set"][0]["tag"], "geoip-cn")
         self.assertEqual(route["rule_set"][0]["format"], "binary")
 
