@@ -2,6 +2,21 @@
 
 本目录用于运行 Mihomo（含 Web UI）并管理由订阅下载或订阅转换生成的配置。
 
+如需使用 sing-box，请查看 [`sing_box/README.md`](sing_box/README.md)。
+
+## 提交范围
+
+仓库只建议提交脚本和 README 文档。订阅配置、核心二进制、Web UI、规则数据库和下载缓存都是本地生成产物，不应提交。
+
+常用提交流程：
+
+```bash
+git add README.md .gitignore Script/*.sh sing_box/README.md sing_box/Script/*.sh sing_box/Script/Enhance/*.py
+git status --short
+```
+
+如果 `config.yaml` 已经被 Git 跟踪，`.gitignore` 不会隐藏它的本地修改。只要不要执行 `git add config.yaml`，它就不会进入提交。
+
 ## 目录结构(均由脚本下载，初始仓库没有)
 
 - `config.yaml`：主配置文件（核心）
@@ -245,6 +260,9 @@ sudo ./Script/setup_mihomo_service.sh
 # 查看服务状态
 sudo systemctl status mihomo
 
+# 删除服务
+sudo ./Script/setup_mihomo_service.sh --remove
+
 # 查看实时日志
 sudo journalctl -u mihomo -f
 ```
@@ -372,6 +390,12 @@ sudo ./Script/setup_mihomo_service.sh --no-start
 
 # 自定义服务名
 sudo ./Script/setup_mihomo_service.sh -n mihomo-main
+
+# 删除服务
+sudo ./Script/setup_mihomo_service.sh --remove
+
+# 删除自定义服务名
+sudo ./Script/setup_mihomo_service.sh -n mihomo-main --remove
 ```
 
 常用管理命令：

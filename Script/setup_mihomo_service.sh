@@ -5,6 +5,7 @@ set -euo pipefail
 SERVICE_NAME="mihomo"
 RUN_USER="root"
 AUTO_START="yes"
+ACTION="install"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -15,6 +16,7 @@ usage() {
   cat <<'EOF'
 用法:
   sudo ./Script/setup_mihomo_service.sh [选项]
+  sudo ./Script/setup_mihomo_service.sh --remove [选项]
 
 选项:
   -n, --name <service>    服务名，默认 mihomo
@@ -22,11 +24,14 @@ usage() {
   -d, --workdir <path>    工作目录（含 config.yaml），默认脚本上级目录
   -u, --user <name>       运行用户，默认 root
       --no-start          仅 enable，不立即启动
+      --remove            停止、禁用并删除 systemd 服务
   -h, --help              显示帮助
 
 示例:
   sudo ./Script/setup_mihomo_service.sh
   sudo ./Script/setup_mihomo_service.sh -n mihomo-main --no-start
+  sudo ./Script/setup_mihomo_service.sh --remove
+  sudo ./Script/setup_mihomo_service.sh -n mihomo-main --remove
   sudo ./Script/setup_mihomo_service.sh -b /opt/mihomo/mihomo -d /opt/mihomo
 EOF
 }
@@ -53,6 +58,10 @@ while [[ $# -gt 0 ]]; do
       AUTO_START="no"
       shift
       ;;
+    --remove)
+      ACTION="remove"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -75,6 +84,36 @@ if [[ -z "$SERVICE_NAME" ]]; then
   exit 1
 fi
 
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "错误: 需要 systemctl" >&2
+  exit 1
+fi
+
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+
+remove_service() {
+  if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    systemctl stop "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    systemctl disable "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  fi
+
+  if [[ -f "$SERVICE_FILE" ]]; then
+    rm -f "$SERVICE_FILE"
+    echo "已删除服务文件: ${SERVICE_FILE}"
+  else
+    echo "服务文件不存在: ${SERVICE_FILE}"
+  fi
+
+  systemctl daemon-reload
+  systemctl reset-failed "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+  echo "服务已删除: ${SERVICE_NAME}.service"
+}
+
+if [[ "$ACTION" == "remove" ]]; then
+  remove_service
+  exit 0
+fi
+
 if [[ ! -x "$BIN_PATH" ]]; then
   echo "错误: mihomo 可执行文件不存在或不可执行: $BIN_PATH" >&2
   exit 1
@@ -89,8 +128,6 @@ if [[ ! -f "$WORK_DIR/config.yaml" ]]; then
   echo "错误: 未找到配置文件: $WORK_DIR/config.yaml" >&2
   exit 1
 fi
-
-SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
