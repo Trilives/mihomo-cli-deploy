@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import shutil
 import sys
+import tempfile
 from collections import Counter
+from ipaddress import ip_address
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -15,6 +18,8 @@ import yaml
 RESERVED_TAGS = {"Proxy", "AI", "Auto", "SG-Auto", "Fallback", "DIRECT", "BLOCK", "DNS"}
 DEFAULT_PREFER = "Singapore,SG,新加坡,狮城"
 DEFAULT_OUTBOUND_CHOICES = ("Proxy", "Auto", "AI", "SG-Auto")
+SING_BOX_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_CUSTOM_CONFIG_PATH = Path(__file__).with_name("clash_nodes_to_singbox_config.json")
 
 AI_DOMAIN_SUFFIXES = [
     "openai.com",
@@ -42,6 +47,22 @@ AI_DOMAIN_SUFFIXES = [
 CN_DOMAIN_SUFFIXES = ["cn", "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn"]
 LOCAL_BYPASS_DOMAINS = ["localhost"]
 LOCAL_BYPASS_IP_CIDRS = ["127.0.0.0/8", "0.0.0.0/8", "::1/128"]
+# Do not exclude 172.16.0.0/12: it contains the TUN-derived DNS address 172.19.0.2.
+# Other private destinations still match the later ip_is_private DIRECT route rule.
+PRIVATE_BYPASS_IP_CIDRS = [
+    "10.0.0.0/8",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fc00::/7",
+    "fe80::/10",
+]
+OVERLAY_BYPASS_IP_CIDRS = [
+    "100.64.0.0/10",
+    "fd7a:115c:a1e0::/48",
+    "10.126.126.0/24",
+    "10.14.14.0/24",
+]
+ROUTE_EXCLUDE_IP_CIDRS = LOCAL_BYPASS_IP_CIDRS + PRIVATE_BYPASS_IP_CIDRS + OVERLAY_BYPASS_IP_CIDRS
 BYPASS_PROCESS_NAMES = [
     "easytier",
     "easytier-cli",
@@ -49,6 +70,27 @@ BYPASS_PROCESS_NAMES = [
     "tailscale",
     "tailscaled",
 ]
+
+
+class CustomConfig(NamedTuple):
+    ai_domain_suffixes: list[str]
+    cn_domain_suffixes: list[str]
+    local_bypass_domains: list[str]
+    route_exclude_ip_cidrs: list[str]
+    bypass_process_names: list[str]
+    easytier_bypass_domains: list[str]
+    easytier_bypass_ip_cidrs: list[str]
+
+
+DEFAULT_CUSTOM_CONFIG = CustomConfig(
+    ai_domain_suffixes=AI_DOMAIN_SUFFIXES,
+    cn_domain_suffixes=CN_DOMAIN_SUFFIXES,
+    local_bypass_domains=LOCAL_BYPASS_DOMAINS,
+    route_exclude_ip_cidrs=ROUTE_EXCLUDE_IP_CIDRS,
+    bypass_process_names=BYPASS_PROCESS_NAMES,
+    easytier_bypass_domains=[],
+    easytier_bypass_ip_cidrs=[],
+)
 
 
 class ConversionError(Exception):
@@ -60,13 +102,117 @@ def load_yaml(path: Path) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as exc:
-        raise ConversionError(f"YAML parse failed: {exc}") from exc
+        raise ConversionError(f"Invalid YAML in input file: {path}") from exc
     except OSError as exc:
-        raise ConversionError(f"Failed to read input file: {exc}") from exc
+        raise ConversionError(f"Failed to read input file: {path}") from exc
 
     if not isinstance(data, dict):
         raise ConversionError("Input YAML root must be a mapping.")
     return data
+
+
+def normalize_string_list(value: Any, field: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConversionError(f"custom config {field} must be a list")
+    result: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def load_custom_config(path: Path) -> CustomConfig:
+    if not path.exists():
+        return DEFAULT_CUSTOM_CONFIG
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as exc:
+        raise ConversionError(f"Invalid JSON in custom config file: {path}") from exc
+    except OSError as exc:
+        raise ConversionError(f"Failed to read custom config file: {path}") from exc
+
+    if not isinstance(data, dict):
+        raise ConversionError("custom config root must be a mapping")
+
+    return CustomConfig(
+        ai_domain_suffixes=normalize_string_list(data.get("ai_domain_suffixes"), "ai_domain_suffixes")
+        or AI_DOMAIN_SUFFIXES,
+        cn_domain_suffixes=normalize_string_list(data.get("cn_domain_suffixes"), "cn_domain_suffixes")
+        or CN_DOMAIN_SUFFIXES,
+        local_bypass_domains=normalize_string_list(data.get("local_bypass_domains"), "local_bypass_domains")
+        or LOCAL_BYPASS_DOMAINS,
+        route_exclude_ip_cidrs=normalize_string_list(data.get("route_exclude_ip_cidrs"), "route_exclude_ip_cidrs")
+        or ROUTE_EXCLUDE_IP_CIDRS,
+        bypass_process_names=normalize_string_list(data.get("bypass_process_names"), "bypass_process_names")
+        or BYPASS_PROCESS_NAMES,
+        easytier_bypass_domains=normalize_string_list(data.get("easytier_bypass_domains"), "easytier_bypass_domains"),
+        easytier_bypass_ip_cidrs=normalize_string_list(
+            data.get("easytier_bypass_ip_cidrs"), "easytier_bypass_ip_cidrs"
+        ),
+    )
+
+
+def resolve_domains_to_cidrs(domains: list[str]) -> list[str]:
+    cidrs: list[str] = []
+    for domain in domains:
+        try:
+            records = socket.getaddrinfo(domain, None, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            print(f"warning: failed to resolve easytier bypass domain {domain}: {exc}")
+            continue
+
+        for record in records:
+            address = record[4][0]
+            try:
+                parsed = ip_address(address)
+            except ValueError:
+                continue
+            cidr = f"{parsed}/{parsed.max_prefixlen}"
+            if cidr not in cidrs:
+                cidrs.append(cidr)
+    return cidrs
+
+
+def validate_output_path(path: Path) -> Path:
+    resolved_path = path.resolve()
+    try:
+        resolved_path.relative_to(SING_BOX_DIR)
+    except ValueError as exc:
+        raise ConversionError(f"Output file must be inside the sing_box directory: {SING_BOX_DIR}") from exc
+    return resolved_path
+
+
+def write_json_config(config: dict[str, Any], output_path: Path) -> None:
+    try:
+        payload = json.dumps(config, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    except (TypeError, ValueError) as exc:
+        raise ConversionError("Failed to serialize generated JSON.") from exc
+
+    temporary_path: Path | None = None
+    replacing_existing = output_path.exists()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=output_path.parent, prefix=f".{output_path.name}.", delete=False
+        ) as temporary_file:
+            temporary_file.write(payload)
+            temporary_path = Path(temporary_file.name)
+        temporary_path.replace(output_path)
+    except OSError as exc:
+        raise ConversionError(f"Failed to write output JSON: {output_path}") from exc
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    if replacing_existing:
+        print(f"Replaced existing output JSON: {output_path}")
 
 
 def normalize_port(value: Any) -> int | None:
@@ -376,17 +522,35 @@ def convert_http(proxy: dict[str, Any], tag: str) -> dict[str, Any]:
     return outbound
 
 
-def build_inbounds() -> list[dict[str, Any]]:
+def build_easytier_ip_cidrs(
+    custom_config: CustomConfig,
+    easytier_resolved_ip_cidrs: list[str] | None = None,
+) -> list[str]:
+    cidrs = list(custom_config.easytier_bypass_ip_cidrs)
+    for cidr in easytier_resolved_ip_cidrs or []:
+        if cidr not in cidrs:
+            cidrs.append(cidr)
+    return cidrs
+
+
+def build_inbounds(
+    custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
+    easytier_resolved_ip_cidrs: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    route_exclude_address = list(custom_config.route_exclude_ip_cidrs)
+    for cidr in build_easytier_ip_cidrs(custom_config, easytier_resolved_ip_cidrs):
+        if cidr not in route_exclude_address:
+            route_exclude_address.append(cidr)
     return [
         {
             "type": "tun",
             "tag": "tun-in",
             "interface_name": "singbox",
             "address": ["172.19.0.1/30"],
-            "mtu": 9000,
+            "mtu": 1400,
             "auto_route": True,
             "strict_route": True,
-            "route_exclude_address": LOCAL_BYPASS_IP_CIDRS,
+            "route_exclude_address": route_exclude_address,
             "stack": "gvisor",
         },
         {
@@ -398,7 +562,14 @@ def build_inbounds() -> list[dict[str, Any]]:
     ]
 
 
-def build_dns() -> dict[str, Any]:
+def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, Any]:
+    rules = [
+        {"domain": custom_config.local_bypass_domains, "server": "local"},
+        {"domain_suffix": custom_config.cn_domain_suffixes, "server": "local"},
+        {"domain_suffix": custom_config.ai_domain_suffixes, "server": "remote"},
+    ]
+    if custom_config.easytier_bypass_domains:
+        rules.insert(1, {"domain": custom_config.easytier_bypass_domains, "server": "local"})
     return {
         "servers": [
             {"type": "udp", "tag": "local", "server": "223.5.5.5", "server_port": 53},
@@ -412,18 +583,12 @@ def build_dns() -> dict[str, Any]:
                 "detour": "AI",
             },
         ],
-        "rules": [
-            {"domain": LOCAL_BYPASS_DOMAINS, "server": "local"},
-            {"domain_suffix": CN_DOMAIN_SUFFIXES, "server": "local"},
-            {"domain_suffix": AI_DOMAIN_SUFFIXES, "server": "remote"},
-        ],
-        # Resolve selected overseas services over the matching proxied DNS path; ordinary and
-        # node bootstrap queries keep using the direct local resolver.
-        "final": "local",
+        "rules": rules,
+        # Keep local/CN lookups direct; route all other domain lookups through proxied DoH.
+        # Proxy-node bootstrap uses route.default_domain_resolver instead of this fallback.
+        "final": "remote",
         "strategy": "prefer_ipv4",
     }
-
-
 
 
 def build_experimental(output_path: Path) -> dict[str, Any]:
@@ -436,24 +601,40 @@ def build_experimental(output_path: Path) -> dict[str, Any]:
         }
     }
 
-def build_route(default_outbound: str, has_sg_auto: bool) -> dict[str, Any]:
+
+def build_route(
+    default_outbound: str,
+    has_sg_auto: bool,
+    custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
+    easytier_resolved_ip_cidrs: list[str] | None = None,
+) -> dict[str, Any]:
     if default_outbound == "SG-Auto" and not has_sg_auto:
         default_outbound = "Proxy"
-    return {
-        "auto_detect_interface": True,
-        "default_domain_resolver": "local",
-        "rules": [
-            {"process_name": BYPASS_PROCESS_NAMES, "action": "route", "outbound": "DIRECT"},
-            {"domain": LOCAL_BYPASS_DOMAINS, "action": "route", "outbound": "DIRECT"},
-            {"ip_cidr": LOCAL_BYPASS_IP_CIDRS, "action": "route", "outbound": "DIRECT"},
+    easytier_ip_cidrs = build_easytier_ip_cidrs(custom_config, easytier_resolved_ip_cidrs)
+    rules: list[dict[str, Any]] = [
+        {"process_name": custom_config.bypass_process_names, "action": "route", "outbound": "DIRECT"},
+        {"domain": custom_config.local_bypass_domains, "action": "route", "outbound": "DIRECT"},
+    ]
+    if custom_config.easytier_bypass_domains:
+        rules.append({"domain": custom_config.easytier_bypass_domains, "action": "route", "outbound": "DIRECT"})
+    if easytier_ip_cidrs:
+        rules.append({"ip_cidr": easytier_ip_cidrs, "action": "route", "outbound": "DIRECT"})
+    rules.extend(
+        [
+            {"ip_cidr": custom_config.route_exclude_ip_cidrs, "action": "route", "outbound": "DIRECT"},
             {"action": "sniff"},
             {"protocol": "dns", "action": "hijack-dns"},
             {"ip_is_private": True, "action": "route", "outbound": "DIRECT"},
-            {"domain_suffix": AI_DOMAIN_SUFFIXES, "action": "route", "outbound": "AI"},
-            {"domain_suffix": CN_DOMAIN_SUFFIXES, "action": "route", "outbound": "DIRECT"},
+            {"domain_suffix": custom_config.ai_domain_suffixes, "action": "route", "outbound": "AI"},
+            {"domain_suffix": custom_config.cn_domain_suffixes, "action": "route", "outbound": "DIRECT"},
             # TODO: For complete CN split routing, add sing-box rule_set files later.
             # The old geoip/geosite fields are intentionally not emitted for 1.13+ compatibility.
-        ],
+        ]
+    )
+    return {
+        "auto_detect_interface": True,
+        "default_domain_resolver": "local",
+        "rules": rules,
         "final": default_outbound,
     }
 
@@ -528,6 +709,8 @@ def build_singbox_config(
     prefer_keywords: list[str],
     default_outbound: str,
     output_path: Path,
+    custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
+    easytier_resolved_ip_cidrs: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     outbounds, outbound_info = build_outbounds(converted_nodes, prefer_keywords)
     if default_outbound == "SG-Auto" and not outbound_info["has_sg_auto"]:
@@ -535,10 +718,15 @@ def build_singbox_config(
         default_outbound = "Proxy"
     config = {
         "log": {"level": "warning"},
-        "dns": build_dns(),
-        "inbounds": build_inbounds(),
+        "dns": build_dns(custom_config),
+        "inbounds": build_inbounds(custom_config, easytier_resolved_ip_cidrs),
         "outbounds": outbounds,
-        "route": build_route(default_outbound, outbound_info["has_sg_auto"]),
+        "route": build_route(
+            default_outbound,
+            outbound_info["has_sg_auto"],
+            custom_config,
+            easytier_resolved_ip_cidrs,
+        ),
         "experimental": build_experimental(output_path),
     }
     return config, outbound_info
@@ -608,8 +796,7 @@ def print_summary(
         print("  skipped reasons:")
         for reason, count in skipped_reasons.most_common():
             print(f"    {reason}: {count}")
-    first_node = converted_nodes[0]["tag"] if converted_nodes else "none"
-    print(f"  default selected node: {first_node}")
+    print("  node tags: omitted from logs")
     print(f"  contains anytls: {any(node['type'] == 'anytls' for node in converted_nodes)}")
     print(f"  SG-Auto generated: {outbound_info['has_sg_auto']}")
     print(f"  SG-Auto node count: {outbound_info['sg_count']}")
@@ -644,6 +831,11 @@ def main() -> int:
     parser.add_argument("output", nargs="?", default="./sing_box/config.json", help="sing-box config.json")
     parser.add_argument("--prefer", default=DEFAULT_PREFER, help="comma separated preferred node keywords")
     parser.add_argument("--default-outbound", default="Proxy", choices=DEFAULT_OUTBOUND_CHOICES)
+    parser.add_argument(
+        "--custom-config",
+        default=str(DEFAULT_CUSTOM_CONFIG_PATH),
+        help="JSON file for custom DNS, route, process, and easytier bypass settings",
+    )
     parser.add_argument("--strict", action="store_true", help="exit on unsupported or incomplete nodes")
     parser.add_argument(
         "--skip-unsupported",
@@ -653,10 +845,13 @@ def main() -> int:
     args = parser.parse_args()
 
     input_path = Path(args.input)
-    output_path = Path(args.output)
     prefer_keywords = parse_prefer_keywords(args.prefer)
 
     try:
+        output_path = validate_output_path(Path(args.output))
+        custom_config_path = Path(args.custom_config)
+        custom_config = load_custom_config(custom_config_path)
+        easytier_resolved_ip_cidrs = resolve_domains_to_cidrs(custom_config.easytier_bypass_domains)
         data = load_yaml(input_path)
         proxies = data.get("proxies")
         if proxies is None:
@@ -670,14 +865,12 @@ def main() -> int:
         converted_nodes: list[dict[str, Any]] = []
         skipped_reasons: Counter[str] = Counter()
         for proxy in proxies:
-            name = proxy.get("name", "<unnamed>") if isinstance(proxy, dict) else "<invalid>"
-            proxy_type = proxy.get("type", "<unknown>") if isinstance(proxy, dict) else "<invalid>"
             outbound, reason = convert_proxy(proxy, used_tags)
             if reason:
-                print(f"warning: skip node {name!r} ({proxy_type}): {reason}")
+                print(f"warning: skipped proxy node: {reason}")
                 skipped_reasons[reason] += 1
                 if args.strict:
-                    raise ConversionError(f"strict mode: skipped node {name!r}: {reason}")
+                    raise ConversionError(f"strict mode: skipped proxy node: {reason}")
                 continue
             assert outbound is not None
             converted_nodes.append(outbound)
@@ -689,16 +882,15 @@ def main() -> int:
             print("warning: no preferred Singapore nodes matched; SG-Auto will not be generated")
 
         config, outbound_info = build_singbox_config(
-            converted_nodes, prefer_keywords, args.default_outbound, output_path
+            converted_nodes,
+            prefer_keywords,
+            args.default_outbound,
+            output_path,
+            custom_config,
+            easytier_resolved_ip_cidrs,
         )
         validate_config_basic(config)
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        if output_path.exists():
-            print(f"Existing config will be overwritten: {output_path}")
-        with output_path.open("w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-            f.write("\n")
+        write_json_config(config, output_path)
 
         print_summary(input_path, output_path, len(proxies), converted_nodes, skipped_reasons, outbound_info)
         return 0
