@@ -5,7 +5,7 @@
 ## 文件说明
 
 - `clash_nodes_to_singbox.py`：转换 Clash/Mihomo 节点为 sing-box `config.json`。
-- `clash_nodes_to_singbox_config.json`：转换脚本的自定义配置文件，用于调整 DNS、路由、直连进程和 easytier 过滤规则。
+- `clash_nodes_to_singbox_config.json`：转换脚本的自定义配置文件，用于调整 DNS、路由、直连进程和 TUN UID 排除规则。
 - `test_clash_nodes_to_singbox.py`：转换脚本的单元测试。
 
 ## 基本用法
@@ -37,23 +37,35 @@
 `clash_nodes_to_singbox_config.json` 支持以下字段：
 
 - `ai_domain_suffixes`：走 `AI` 出站的域名后缀。
+- `streaming_domain_suffixes`：走 `Streaming` 出站的流媒体域名后缀。
 - `cn_domain_suffixes`：本地 DNS 和 `DIRECT` 路由的国内域名后缀。
 - `local_bypass_domains`：本地直连域名。
 - `route_exclude_ip_cidrs`：TUN 自动路由排除网段，同时会生成直连路由规则。
-- `bypass_process_names`：直连进程名，例如 `easytier`、`tailscaled`。
-- `easytier_bypass_domains`：需要过滤直连的 easytier 服务器域名。
-- `easytier_bypass_ip_cidrs`：手动补充的 easytier 服务器 IP CIDR。
+- `bypass_process_names`：直连进程名，例如 `tailscaled`。
+- `tun_exclude_uids`：写入 TUN 入站的 `exclude_uid`，用于让指定系统用户的流量绕过 sing-box 自动路由。
 
-## easytier 直连
+## 出站分组
 
-脚本会读取 `easytier_bypass_domains`，自动解析域名 IP，并把结果转换为精确 CIDR：
+脚本会根据 `--prefer` 关键词生成新加坡专用分组：
 
-- IPv4 会生成 `/32`
-- IPv6 会生成 `/128`
+- `SG-Auto`：`urltest` 自动测速分组。
+- `SG-Fallback`：同一批新加坡节点的手动选择分组。
 
-这些 CIDR 会被加入 sing-box 路由规则并走 `DIRECT`。域名本身也会加入本地 DNS 和直连路由规则，避免 TUN 模式下 easytier 服务器流量被代理或 DNS 劫持。
+名称包含 `实验` 的节点不会进入 `SG-Auto` 或 `SG-Fallback`，但仍保留在 `Auto` 和 `Proxy` 的完整节点列表中。`AI` 选择器默认选择 `Proxy`，也可以切换到 `SG-Auto`、`SG-Fallback`、`Auto` 或 `DIRECT`。
 
-如果域名解析失败，脚本只会输出 warning，并继续生成配置。
+`Auto` 和 `Proxy` 会过滤订阅说明节点，例如 `Traffic:`、`Expire:`、`剩余流量`、`过期时间`。顶层 `outbounds` 会先保留真实节点和常用策略组，再把 `SG-Auto`、`SG-Fallback`、`Auto` 等自动/地区分组放在后面，`Fallback` 放在最后；`Proxy` 内部仍保持分组优先。
+
+`Streaming` 是和 `AI` 类似的流媒体选择器，匹配 `streaming_domain_suffixes` 后走该组，默认选择 `Proxy`。
+
+## EasyTier 绕过
+
+EasyTier 的 P2P peer IP 是动态发现的，不应靠 `easytier_bypass_domains` 或手工 IP 列表长期维护。推荐做法：
+
+- 让 EasyTier 用独立系统用户运行，例如 `easytier`。
+- 添加高于 sing-box `9000+` 规则的策略路由，例如 `ip rule add pref 1000 uidrange 997-997 lookup main`。
+- 在 `clash_nodes_to_singbox_config.json` 中设置 `tun_exclude_uids`，让 sing-box TUN 也显式排除 EasyTier UID。
+
+这样可以保留 sing-box `strict_route`，同时让 EasyTier 动态 P2P 数据面稳定走物理网卡。
 
 ## 校验
 
