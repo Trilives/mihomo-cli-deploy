@@ -160,9 +160,13 @@ http://<LAN-IP>:9090/ui
 - 默认推荐使用 `Script/download_sing_box_subscription.sh` 走 subconverter 后端生成 sing-box 配置。
 - `https://sub-web.wcc.best` 和 `https://sublink.dev` 是前端页面，不一定能直接作为脚本 API 后端；脚本需要真实的 subconverter 后端，例如自建 `http://127.0.0.1:25500`。
 - 本地 Python 转换脚本只是兜底方案，当前支持从 `proxies` 转换 `anytls`、`trojan`、`ss`/`shadowsocks`、`vmess`、`vless`、`hysteria2`/`hy2`、`tuic`、`socks`/`socks5`、`http` 节点。
-- 本地兜底转换会生成 `tun` 和 `mixed` 入站、`Proxy`/`Auto`/`AI`/`Fallback` 出站、基础 DNS、基础分流规则和 Clash API。完整 CN 分流规则集尚未内置。
+- 本地兜底转换会生成 `tun` 和 `mixed` 入站、`Proxy`/`Auto`/`AI`/`Streaming`/`SG-Auto`/`SG-Fallback`/`Fallback` 出站、基础 DNS、基础分流规则和 Clash API。完整 CN 分流规则集尚未内置。
+- `Auto` 和 `Proxy` 会过滤订阅说明节点，例如 `Traffic:`、`Expire:`、`剩余流量`、`过期时间`。
+- 顶层 `outbounds` 会先保留真实节点和常用策略组，再把 `SG-Auto`、`SG-Fallback`、`Auto` 等自动/地区分组放在后面，`Fallback` 放在最后；`Proxy` 内部仍保持分组优先，便于常规切换。
+- `SG-Auto` 和 `SG-Fallback` 只从首选新加坡节点中生成，并排除名称包含 `实验` 的节点；`AI` 和 `Streaming` 选择器默认优先选择 `Proxy`，也可手动切到 `SG-Auto`、`SG-Fallback`、`Auto` 或 `DIRECT`。
 - 本地兜底转换会从 TUN 自动路由中排除 `127.0.0.0/8`、`0.0.0.0/8`、`::1/128`，并强制 `localhost` 和这些本机地址走 `DIRECT`。
-- 本地兜底转换会让 `easytier`、`easytier-cli`、`easytier-core`、`tailscale`、`tailscaled` 进程直连，避免 TUN 模式下 EasyTier 和 Tailscale 流量被代理或 DNS 劫持。
+- EasyTier 不再依赖域名/IP 列表绕过 sing-box。推荐让 EasyTier 使用独立系统用户运行，并在系统路由中添加优先级高于 sing-box 的 `uidrange <uid>-<uid> lookup main` 规则；生成脚本可通过 `tun_exclude_uids` 同步写入 sing-box TUN 的 `exclude_uid`。
+- 本地兜底转换仍会让 `tailscale`、`tailscaled` 等配置中的 `bypass_process_names` 进程直连。
 - shell 中建议同时设置本机地址不走代理：`export NO_PROXY=localhost,127.0.0.1,::1` 和 `export no_proxy=localhost,127.0.0.1,::1`。
 - Shadowsocks `obfs` 插件节点会转换为 `obfs-local` 插件配置，运行环境需要安装 `obfs-local`，否则该类节点运行时会失败。
 - systemd 脚本安装服务时会把当前配置复制到 `/etc/sing-box/<service>.json`，后续修改 `sing_box/config.json` 后需要重新执行安装脚本或手动同步服务配置。

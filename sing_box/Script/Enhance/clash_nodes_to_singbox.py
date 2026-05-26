@@ -3,21 +3,32 @@ from __future__ import annotations
 
 import argparse
 import json
-import socket
 import shutil
 import sys
 import tempfile
 from collections import Counter
-from ipaddress import ip_address
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import yaml
 
 
-RESERVED_TAGS = {"Proxy", "AI", "Auto", "SG-Auto", "Fallback", "DIRECT", "BLOCK", "DNS"}
+RESERVED_TAGS = {
+    "Proxy",
+    "AI",
+    "Streaming",
+    "Auto",
+    "SG-Auto",
+    "SG-Fallback",
+    "Fallback",
+    "DIRECT",
+    "BLOCK",
+    "DNS",
+}
 DEFAULT_PREFER = "Singapore,SG,新加坡,狮城"
-DEFAULT_OUTBOUND_CHOICES = ("Proxy", "Auto", "AI", "SG-Auto")
+DEFAULT_OUTBOUND_CHOICES = ("Proxy", "Auto", "AI", "SG-Auto", "SG-Fallback")
+SG_EXCLUDE_KEYWORDS = ("实验",)
+INFO_NODE_PREFIXES = ("traffic:", "expire:", "剩余流量", "过期时间")
 SING_BOX_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CUSTOM_CONFIG_PATH = Path(__file__).with_name("clash_nodes_to_singbox_config.json")
 
@@ -43,6 +54,26 @@ AI_DOMAIN_SUFFIXES = [
     "docker.io",
     "ghcr.io",
 ]
+STREAMING_DOMAIN_SUFFIXES = [
+    "netflix.com",
+    "nflxvideo.net",
+    "nflximg.net",
+    "nflxso.net",
+    "disneyplus.com",
+    "disney-plus.net",
+    "dssott.com",
+    "hulu.com",
+    "huluim.com",
+    "hbomax.com",
+    "max.com",
+    "primevideo.com",
+    "amazonvideo.com",
+    "youtube.com",
+    "googlevideo.com",
+    "ytimg.com",
+    "spotify.com",
+    "scdn.co",
+]
 
 CN_DOMAIN_SUFFIXES = ["cn", "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn"]
 LOCAL_BYPASS_DOMAINS = ["localhost"]
@@ -64,9 +95,6 @@ OVERLAY_BYPASS_IP_CIDRS = [
 ]
 ROUTE_EXCLUDE_IP_CIDRS = LOCAL_BYPASS_IP_CIDRS + PRIVATE_BYPASS_IP_CIDRS + OVERLAY_BYPASS_IP_CIDRS
 BYPASS_PROCESS_NAMES = [
-    "easytier",
-    "easytier-cli",
-    "easytier-core",
     "tailscale",
     "tailscaled",
 ]
@@ -74,22 +102,22 @@ BYPASS_PROCESS_NAMES = [
 
 class CustomConfig(NamedTuple):
     ai_domain_suffixes: list[str]
+    streaming_domain_suffixes: list[str]
     cn_domain_suffixes: list[str]
     local_bypass_domains: list[str]
     route_exclude_ip_cidrs: list[str]
     bypass_process_names: list[str]
-    easytier_bypass_domains: list[str]
-    easytier_bypass_ip_cidrs: list[str]
+    tun_exclude_uids: list[int]
 
 
 DEFAULT_CUSTOM_CONFIG = CustomConfig(
     ai_domain_suffixes=AI_DOMAIN_SUFFIXES,
+    streaming_domain_suffixes=STREAMING_DOMAIN_SUFFIXES,
     cn_domain_suffixes=CN_DOMAIN_SUFFIXES,
     local_bypass_domains=LOCAL_BYPASS_DOMAINS,
     route_exclude_ip_cidrs=ROUTE_EXCLUDE_IP_CIDRS,
     bypass_process_names=BYPASS_PROCESS_NAMES,
-    easytier_bypass_domains=[],
-    easytier_bypass_ip_cidrs=[],
+    tun_exclude_uids=[],
 )
 
 
@@ -124,6 +152,24 @@ def normalize_string_list(value: Any, field: str) -> list[str]:
     return result
 
 
+def normalize_int_list(value: Any, field: str) -> list[int]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ConversionError(f"custom config {field} must be a list")
+    result: list[int] = []
+    for item in value:
+        try:
+            number = int(item)
+        except (TypeError, ValueError) as exc:
+            raise ConversionError(f"custom config {field} must contain integers") from exc
+        if number < 0:
+            raise ConversionError(f"custom config {field} must contain non-negative integers")
+        if number not in result:
+            result.append(number)
+    return result
+
+
 def load_custom_config(path: Path) -> CustomConfig:
     if not path.exists():
         return DEFAULT_CUSTOM_CONFIG
@@ -141,6 +187,10 @@ def load_custom_config(path: Path) -> CustomConfig:
     return CustomConfig(
         ai_domain_suffixes=normalize_string_list(data.get("ai_domain_suffixes"), "ai_domain_suffixes")
         or AI_DOMAIN_SUFFIXES,
+        streaming_domain_suffixes=normalize_string_list(
+            data.get("streaming_domain_suffixes"), "streaming_domain_suffixes"
+        )
+        or STREAMING_DOMAIN_SUFFIXES,
         cn_domain_suffixes=normalize_string_list(data.get("cn_domain_suffixes"), "cn_domain_suffixes")
         or CN_DOMAIN_SUFFIXES,
         local_bypass_domains=normalize_string_list(data.get("local_bypass_domains"), "local_bypass_domains")
@@ -149,32 +199,8 @@ def load_custom_config(path: Path) -> CustomConfig:
         or ROUTE_EXCLUDE_IP_CIDRS,
         bypass_process_names=normalize_string_list(data.get("bypass_process_names"), "bypass_process_names")
         or BYPASS_PROCESS_NAMES,
-        easytier_bypass_domains=normalize_string_list(data.get("easytier_bypass_domains"), "easytier_bypass_domains"),
-        easytier_bypass_ip_cidrs=normalize_string_list(
-            data.get("easytier_bypass_ip_cidrs"), "easytier_bypass_ip_cidrs"
-        ),
+        tun_exclude_uids=normalize_int_list(data.get("tun_exclude_uids"), "tun_exclude_uids"),
     )
-
-
-def resolve_domains_to_cidrs(domains: list[str]) -> list[str]:
-    cidrs: list[str] = []
-    for domain in domains:
-        try:
-            records = socket.getaddrinfo(domain, None, type=socket.SOCK_STREAM)
-        except socket.gaierror as exc:
-            print(f"warning: failed to resolve easytier bypass domain {domain}: {exc}")
-            continue
-
-        for record in records:
-            address = record[4][0]
-            try:
-                parsed = ip_address(address)
-            except ValueError:
-                continue
-            cidr = f"{parsed}/{parsed.max_prefixlen}"
-            if cidr not in cidrs:
-                cidrs.append(cidr)
-    return cidrs
 
 
 def validate_output_path(path: Path) -> Path:
@@ -242,7 +268,16 @@ def parse_prefer_keywords(value: str) -> list[str]:
 
 def is_preferred_node(name: str, prefer_keywords: list[str]) -> bool:
     lowered = name.lower()
-    return any(keyword in lowered for keyword in prefer_keywords)
+    return any(keyword.lower() in lowered for keyword in prefer_keywords)
+
+
+def is_excluded_sg_node(name: str) -> bool:
+    return any(keyword in name for keyword in SG_EXCLUDE_KEYWORDS)
+
+
+def is_informational_node(name: str) -> bool:
+    lowered = name.strip().lower()
+    return any(lowered.startswith(prefix) for prefix in INFO_NODE_PREFIXES)
 
 
 def require_fields(proxy: dict[str, Any], fields: list[str]) -> str | None:
@@ -298,7 +333,8 @@ def websocket_transport(proxy: dict[str, Any]) -> dict[str, Any] | None:
     network = str(proxy.get("network", "")).lower()
     if network not in {"ws", "websocket"}:
         return None
-    opts = proxy.get("ws-opts") if isinstance(proxy.get("ws-opts"), dict) else {}
+    raw_opts = proxy.get("ws-opts")
+    opts: dict[str, Any] = raw_opts if isinstance(raw_opts, dict) else {}
     transport: dict[str, Any] = {"type": "ws"}
     if opts.get("path"):
         transport["path"] = str(opts["path"])
@@ -312,7 +348,8 @@ def grpc_transport(proxy: dict[str, Any]) -> dict[str, Any] | None:
     network = str(proxy.get("network", "")).lower()
     if network != "grpc":
         return None
-    opts = proxy.get("grpc-opts") if isinstance(proxy.get("grpc-opts"), dict) else {}
+    raw_opts = proxy.get("grpc-opts")
+    opts: dict[str, Any] = raw_opts if isinstance(raw_opts, dict) else {}
     transport: dict[str, Any] = {"type": "grpc"}
     service_name = opts.get("grpc-service-name") or opts.get("serviceName") or opts.get("service_name")
     if service_name:
@@ -324,7 +361,8 @@ def httpupgrade_transport(proxy: dict[str, Any]) -> dict[str, Any] | None:
     network = str(proxy.get("network", "")).lower()
     if network not in {"httpupgrade", "http-upgrade"}:
         return None
-    opts = proxy.get("httpupgrade-opts") if isinstance(proxy.get("httpupgrade-opts"), dict) else {}
+    raw_opts = proxy.get("httpupgrade-opts")
+    opts: dict[str, Any] = raw_opts if isinstance(raw_opts, dict) else {}
     transport: dict[str, Any] = {"type": "httpupgrade"}
     if opts.get("path"):
         transport["path"] = str(opts["path"])
@@ -419,7 +457,8 @@ def convert_shadowsocks(proxy: dict[str, Any], tag: str) -> dict[str, Any]:
     if plugin:
         if plugin != "obfs":
             raise ConversionError(f"unsupported shadowsocks plugin {plugin}")
-        opts = proxy.get("plugin-opts") if isinstance(proxy.get("plugin-opts"), dict) else {}
+        raw_opts = proxy.get("plugin-opts")
+        opts: dict[str, Any] = raw_opts if isinstance(raw_opts, dict) else {}
         mode = str(opts.get("mode") or "http").lower()
         host = opts.get("host")
         if mode not in {"http", "tls"}:
@@ -522,37 +561,23 @@ def convert_http(proxy: dict[str, Any], tag: str) -> dict[str, Any]:
     return outbound
 
 
-def build_easytier_ip_cidrs(
-    custom_config: CustomConfig,
-    easytier_resolved_ip_cidrs: list[str] | None = None,
-) -> list[str]:
-    cidrs = list(custom_config.easytier_bypass_ip_cidrs)
-    for cidr in easytier_resolved_ip_cidrs or []:
-        if cidr not in cidrs:
-            cidrs.append(cidr)
-    return cidrs
-
-
-def build_inbounds(
-    custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
-    easytier_resolved_ip_cidrs: list[str] | None = None,
-) -> list[dict[str, Any]]:
+def build_inbounds(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> list[dict[str, Any]]:
     route_exclude_address = list(custom_config.route_exclude_ip_cidrs)
-    for cidr in build_easytier_ip_cidrs(custom_config, easytier_resolved_ip_cidrs):
-        if cidr not in route_exclude_address:
-            route_exclude_address.append(cidr)
+    tun_inbound: dict[str, Any] = {
+        "type": "tun",
+        "tag": "tun-in",
+        "interface_name": "singbox",
+        "address": ["172.19.0.1/30"],
+        "mtu": 1400,
+        "auto_route": True,
+        "strict_route": True,
+        "route_exclude_address": route_exclude_address,
+        "stack": "gvisor",
+    }
+    if custom_config.tun_exclude_uids:
+        tun_inbound["exclude_uid"] = custom_config.tun_exclude_uids
     return [
-        {
-            "type": "tun",
-            "tag": "tun-in",
-            "interface_name": "singbox",
-            "address": ["172.19.0.1/30"],
-            "mtu": 1400,
-            "auto_route": True,
-            "strict_route": True,
-            "route_exclude_address": route_exclude_address,
-            "stack": "gvisor",
-        },
+        tun_inbound,
         {
             "type": "mixed",
             "tag": "mixed-in",
@@ -567,9 +592,8 @@ def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, 
         {"domain": custom_config.local_bypass_domains, "server": "local"},
         {"domain_suffix": custom_config.cn_domain_suffixes, "server": "local"},
         {"domain_suffix": custom_config.ai_domain_suffixes, "server": "remote"},
+        {"domain_suffix": custom_config.streaming_domain_suffixes, "server": "remote"},
     ]
-    if custom_config.easytier_bypass_domains:
-        rules.insert(1, {"domain": custom_config.easytier_bypass_domains, "server": "local"})
     return {
         "servers": [
             {"type": "udp", "tag": "local", "server": "223.5.5.5", "server_port": 53},
@@ -606,19 +630,13 @@ def build_route(
     default_outbound: str,
     has_sg_auto: bool,
     custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
-    easytier_resolved_ip_cidrs: list[str] | None = None,
 ) -> dict[str, Any]:
-    if default_outbound == "SG-Auto" and not has_sg_auto:
+    if default_outbound in {"SG-Auto", "SG-Fallback"} and not has_sg_auto:
         default_outbound = "Proxy"
-    easytier_ip_cidrs = build_easytier_ip_cidrs(custom_config, easytier_resolved_ip_cidrs)
     rules: list[dict[str, Any]] = [
         {"process_name": custom_config.bypass_process_names, "action": "route", "outbound": "DIRECT"},
         {"domain": custom_config.local_bypass_domains, "action": "route", "outbound": "DIRECT"},
     ]
-    if custom_config.easytier_bypass_domains:
-        rules.append({"domain": custom_config.easytier_bypass_domains, "action": "route", "outbound": "DIRECT"})
-    if easytier_ip_cidrs:
-        rules.append({"ip_cidr": easytier_ip_cidrs, "action": "route", "outbound": "DIRECT"})
     rules.extend(
         [
             {"ip_cidr": custom_config.route_exclude_ip_cidrs, "action": "route", "outbound": "DIRECT"},
@@ -626,6 +644,7 @@ def build_route(
             {"protocol": "dns", "action": "hijack-dns"},
             {"ip_is_private": True, "action": "route", "outbound": "DIRECT"},
             {"domain_suffix": custom_config.ai_domain_suffixes, "action": "route", "outbound": "AI"},
+            {"domain_suffix": custom_config.streaming_domain_suffixes, "action": "route", "outbound": "Streaming"},
             {"domain_suffix": custom_config.cn_domain_suffixes, "action": "route", "outbound": "DIRECT"},
             # TODO: For complete CN split routing, add sing-box rule_set files later.
             # The old geoip/geosite fields are intentionally not emitted for 1.13+ compatibility.
@@ -643,12 +662,14 @@ def build_outbounds(
     converted_nodes: list[dict[str, Any]], prefer_keywords: list[str]
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     node_tags = [node["tag"] for node in converted_nodes]
-    sg_tags = [tag for tag in node_tags if is_preferred_node(tag, prefer_keywords)]
+    selectable_tags = [tag for tag in node_tags if not is_informational_node(tag)]
+    sg_tags = [tag for tag in selectable_tags if is_preferred_node(tag, prefer_keywords) and not is_excluded_sg_node(tag)]
     has_sg_auto = bool(sg_tags)
 
     outbounds: list[dict[str, Any]] = list(converted_nodes)
+    sg_group_outbounds: list[dict[str, Any]] = []
     if has_sg_auto:
-        outbounds.append(
+        sg_group_outbounds.append(
             {
                 "type": "urltest",
                 "tag": "SG-Auto",
@@ -658,49 +679,60 @@ def build_outbounds(
                 "tolerance": 50,
             }
         )
+        sg_group_outbounds.append({"type": "selector", "tag": "SG-Fallback", "outbounds": sg_tags, "default": sg_tags[0]})
 
-    outbounds.append(
-        {
-            "type": "urltest",
-            "tag": "Auto",
-            "outbounds": node_tags,
-            "url": "https://www.gstatic.com/generate_204",
-            "interval": "5m",
-            "tolerance": 50,
-        }
-    )
+    auto_outbound = {
+        "type": "urltest",
+        "tag": "Auto",
+        "outbounds": selectable_tags,
+        "url": "https://www.gstatic.com/generate_204",
+        "interval": "5m",
+        "tolerance": 50,
+    }
 
-    ai_default = "SG-Auto" if has_sg_auto else "Auto"
-    ai_outbounds = ["SG-Auto", "Auto", "DIRECT"] if has_sg_auto else ["Auto", "DIRECT"]
+    ai_default = "Proxy"
+    ai_outbounds = ["Proxy", "SG-Auto", "SG-Fallback", "Auto", "DIRECT"] if has_sg_auto else ["Proxy", "Auto", "DIRECT"]
     outbounds.append({"type": "selector", "tag": "AI", "outbounds": ai_outbounds, "default": ai_default})
 
+    streaming_default = "Proxy"
+    streaming_outbounds = (
+        ["Proxy", "SG-Auto", "SG-Fallback", "Auto", "DIRECT"] if has_sg_auto else ["Proxy", "Auto", "DIRECT"]
+    )
+    outbounds.append(
+        {"type": "selector", "tag": "Streaming", "outbounds": streaming_outbounds, "default": streaming_default}
+    )
+
     proxy_default = "SG-Auto" if has_sg_auto else "Auto"
-    proxy_outbounds = ["AI"]
+    proxy_outbounds: list[str] = []
     if has_sg_auto:
-        proxy_outbounds.append("SG-Auto")
-    proxy_outbounds.extend(["Auto", *node_tags, "DIRECT"])
+        proxy_outbounds.extend(["SG-Auto", "SG-Fallback"])
+    proxy_outbounds.append("Auto")
+    proxy_outbounds.extend([*selectable_tags, "DIRECT"])
     outbounds.append(
         {"type": "selector", "tag": "Proxy", "outbounds": proxy_outbounds, "default": proxy_default}
     )
 
+    outbounds.extend([*sg_group_outbounds, auto_outbound])
     outbounds.extend(
         [
+            {"type": "direct", "tag": "DIRECT"},
+            {"type": "block", "tag": "BLOCK"},
             {
                 "type": "selector",
                 "tag": "Fallback",
                 "outbounds": ["Proxy", "Auto", "DIRECT"],
                 "default": "Proxy",
             },
-            {"type": "direct", "tag": "DIRECT"},
-            {"type": "block", "tag": "BLOCK"},
         ]
     )
     return outbounds, {
         "has_sg_auto": has_sg_auto,
+        "has_sg_fallback": has_sg_auto,
         "sg_count": len(sg_tags),
-        "auto_count": len(node_tags),
+        "auto_count": len(selectable_tags),
         "proxy_default": proxy_default,
         "ai_default": ai_default,
+        "streaming_default": streaming_default,
     }
 
 
@@ -710,22 +742,20 @@ def build_singbox_config(
     default_outbound: str,
     output_path: Path,
     custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
-    easytier_resolved_ip_cidrs: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     outbounds, outbound_info = build_outbounds(converted_nodes, prefer_keywords)
-    if default_outbound == "SG-Auto" and not outbound_info["has_sg_auto"]:
-        print("warning: --default-outbound SG-Auto requested but SG-Auto was not generated; using Proxy")
+    if default_outbound in {"SG-Auto", "SG-Fallback"} and not outbound_info["has_sg_auto"]:
+        print(f"warning: --default-outbound {default_outbound} requested but no Singapore group was generated; using Proxy")
         default_outbound = "Proxy"
     config = {
         "log": {"level": "warning"},
         "dns": build_dns(custom_config),
-        "inbounds": build_inbounds(custom_config, easytier_resolved_ip_cidrs),
+        "inbounds": build_inbounds(custom_config),
         "outbounds": outbounds,
         "route": build_route(
             default_outbound,
             outbound_info["has_sg_auto"],
             custom_config,
-            easytier_resolved_ip_cidrs,
         ),
         "experimental": build_experimental(output_path),
     }
@@ -772,6 +802,10 @@ def validate_config_basic(config: dict[str, Any]) -> None:
         sg_auto = next(item for item in config["outbounds"] if item["tag"] == "SG-Auto")
         if not sg_auto.get("outbounds"):
             raise ConversionError("SG-Auto outbounds must be non-empty")
+    if "SG-Fallback" in tag_set:
+        sg_fallback = next(item for item in config["outbounds"] if item["tag"] == "SG-Fallback")
+        if not sg_fallback.get("outbounds"):
+            raise ConversionError("SG-Fallback outbounds must be non-empty")
     auto = next((item for item in config["outbounds"] if item["tag"] == "Auto"), None)
     if not auto or not auto.get("outbounds"):
         raise ConversionError("Auto outbounds must be non-empty")
@@ -799,10 +833,12 @@ def print_summary(
     print("  node tags: omitted from logs")
     print(f"  contains anytls: {any(node['type'] == 'anytls' for node in converted_nodes)}")
     print(f"  SG-Auto generated: {outbound_info['has_sg_auto']}")
+    print(f"  SG-Fallback generated: {outbound_info['has_sg_fallback']}")
     print(f"  SG-Auto node count: {outbound_info['sg_count']}")
     print(f"  Auto node count: {outbound_info['auto_count']}")
     print(f"  Proxy default outbound: {outbound_info['proxy_default']}")
     print(f"  AI default outbound: {outbound_info['ai_default']}")
+    print(f"  Streaming default outbound: {outbound_info['streaming_default']}")
     print("  Clash API controller: 0.0.0.0:9090")
     print("  Web UI path: ui (relative to the configuration directory)")
     print("  Web UI URL: http://<LAN-IP>:9090/ui")
@@ -851,7 +887,6 @@ def main() -> int:
         output_path = validate_output_path(Path(args.output))
         custom_config_path = Path(args.custom_config)
         custom_config = load_custom_config(custom_config_path)
-        easytier_resolved_ip_cidrs = resolve_domains_to_cidrs(custom_config.easytier_bypass_domains)
         data = load_yaml(input_path)
         proxies = data.get("proxies")
         if proxies is None:
@@ -887,7 +922,6 @@ def main() -> int:
             args.default_outbound,
             output_path,
             custom_config,
-            easytier_resolved_ip_cidrs,
         )
         validate_config_basic(config)
         write_json_config(config, output_path)

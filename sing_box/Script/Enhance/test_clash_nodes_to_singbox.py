@@ -54,12 +54,12 @@ class ClashNodesToSingboxDnsTest(unittest.TestCase):
     def test_custom_config_overrides_dns_and_route_values(self) -> None:
         custom_config = converter.CustomConfig(
             ai_domain_suffixes=["ai.example"],
+            streaming_domain_suffixes=["stream.example"],
             cn_domain_suffixes=["local.example"],
             local_bypass_domains=["router.local"],
             route_exclude_ip_cidrs=["192.0.2.0/24"],
-            bypass_process_names=["easytier-custom"],
-            easytier_bypass_domains=["easytier.example"],
-            easytier_bypass_ip_cidrs=["203.0.113.10/32"],
+            bypass_process_names=["tailscaled-custom"],
+            tun_exclude_uids=[997],
         )
 
         dns = converter.build_dns(custom_config)
@@ -67,62 +67,45 @@ class ClashNodesToSingboxDnsTest(unittest.TestCase):
         tun_inbound = converter.build_inbounds(custom_config)[0]
 
         self.assertIn({"domain": ["router.local"], "server": "local"}, dns["rules"])
-        self.assertIn({"domain": ["easytier.example"], "server": "local"}, dns["rules"])
         self.assertIn({"domain_suffix": ["ai.example"], "server": "remote"}, dns["rules"])
-        self.assertEqual(tun_inbound["route_exclude_address"], ["192.0.2.0/24", "203.0.113.10/32"])
+        self.assertIn({"domain_suffix": ["stream.example"], "server": "remote"}, dns["rules"])
+        self.assertEqual(tun_inbound["route_exclude_address"], ["192.0.2.0/24"])
+        self.assertEqual(tun_inbound["exclude_uid"], [997])
         self.assertIn(
-            {"process_name": ["easytier-custom"], "action": "route", "outbound": "DIRECT"},
+            {"process_name": ["tailscaled-custom"], "action": "route", "outbound": "DIRECT"},
             route["rules"],
         )
         self.assertIn(
-            {"domain": ["easytier.example"], "action": "route", "outbound": "DIRECT"},
-            route["rules"],
-        )
-        self.assertIn(
-            {"ip_cidr": ["203.0.113.10/32"], "action": "route", "outbound": "DIRECT"},
+            {"domain_suffix": ["stream.example"], "action": "route", "outbound": "Streaming"},
             route["rules"],
         )
 
-    def test_resolved_easytier_ips_are_added_to_direct_route(self) -> None:
-        custom_config = converter.CustomConfig(
-            ai_domain_suffixes=converter.AI_DOMAIN_SUFFIXES,
-            cn_domain_suffixes=converter.CN_DOMAIN_SUFFIXES,
-            local_bypass_domains=converter.LOCAL_BYPASS_DOMAINS,
-            route_exclude_ip_cidrs=converter.ROUTE_EXCLUDE_IP_CIDRS,
-            bypass_process_names=converter.BYPASS_PROCESS_NAMES,
-            easytier_bypass_domains=["easytier.example"],
-            easytier_bypass_ip_cidrs=["203.0.113.10/32"],
-        )
+    def test_sg_fallback_and_ai_can_select_proxy(self) -> None:
+        nodes = [
+            {"type": "direct", "tag": "Traffic: 1 GB | 20 GB"},
+            {"type": "direct", "tag": "Expire: 2027-01-28"},
+            {"type": "direct", "tag": "SG Node"},
+            {"type": "direct", "tag": "SG 实验 Node"},
+            {"type": "direct", "tag": "US Node"},
+        ]
 
-        route = converter.build_route(
-            "Proxy",
-            has_sg_auto=False,
-            custom_config=custom_config,
-            easytier_resolved_ip_cidrs=["203.0.113.10/32", "2001:db8::1/128"],
-        )
+        outbounds, info = converter.build_outbounds(nodes, ["SG"])
+        by_tag = {outbound["tag"]: outbound for outbound in outbounds}
 
-        self.assertIn(
-            {"ip_cidr": ["203.0.113.10/32", "2001:db8::1/128"], "action": "route", "outbound": "DIRECT"},
-            route["rules"],
-        )
-
-    def test_resolved_easytier_ips_are_added_to_tun_route_excludes(self) -> None:
-        custom_config = converter.CustomConfig(
-            ai_domain_suffixes=converter.AI_DOMAIN_SUFFIXES,
-            cn_domain_suffixes=converter.CN_DOMAIN_SUFFIXES,
-            local_bypass_domains=converter.LOCAL_BYPASS_DOMAINS,
-            route_exclude_ip_cidrs=["192.0.2.0/24"],
-            bypass_process_names=converter.BYPASS_PROCESS_NAMES,
-            easytier_bypass_domains=["easytier.example"],
-            easytier_bypass_ip_cidrs=["203.0.113.10/32"],
-        )
-
-        tun_inbound = converter.build_inbounds(custom_config, ["203.0.113.10/32", "2001:db8::1/128"])[0]
-
-        self.assertEqual(
-            tun_inbound["route_exclude_address"],
-            ["192.0.2.0/24", "203.0.113.10/32", "2001:db8::1/128"],
-        )
+        self.assertTrue(info["has_sg_fallback"])
+        self.assertEqual(by_tag["SG-Fallback"]["outbounds"], ["SG Node"])
+        self.assertEqual(by_tag["SG-Auto"]["outbounds"], ["SG Node"])
+        self.assertEqual(by_tag["Auto"]["outbounds"], ["SG Node", "SG 实验 Node", "US Node"])
+        self.assertEqual(by_tag["AI"]["outbounds"][0], "Proxy")
+        self.assertEqual(by_tag["Streaming"]["outbounds"][0], "Proxy")
+        self.assertNotIn("AI", by_tag["Proxy"]["outbounds"])
+        self.assertNotIn("Streaming", by_tag["Proxy"]["outbounds"])
+        self.assertEqual(by_tag["Proxy"]["outbounds"][:3], ["SG-Auto", "SG-Fallback", "Auto"])
+        self.assertEqual(by_tag["Fallback"]["outbounds"], ["Proxy", "Auto", "DIRECT"])
+        self.assertNotIn("Traffic: 1 GB | 20 GB", by_tag["Proxy"]["outbounds"])
+        self.assertNotIn("Expire: 2027-01-28", by_tag["Proxy"]["outbounds"])
+        outbound_tags = [outbound["tag"] for outbound in outbounds]
+        self.assertEqual(outbound_tags[-1], "Fallback")
 
 
 class ClashNodesToSingboxErrorHandlingTest(unittest.TestCase):
@@ -144,7 +127,8 @@ class ClashNodesToSingboxErrorHandlingTest(unittest.TestCase):
                 json.dumps(
                     {
                         "ai_domain_suffixes": ["ai.example", "ai.example"],
-                        "easytier_bypass_domains": ["easytier.example"],
+                        "streaming_domain_suffixes": ["stream.example"],
+                        "tun_exclude_uids": [997, "997"],
                     }
                 ),
                 encoding="utf-8",
@@ -152,9 +136,10 @@ class ClashNodesToSingboxErrorHandlingTest(unittest.TestCase):
 
             custom_config = converter.load_custom_config(config_path)
 
-            self.assertEqual(custom_config.ai_domain_suffixes, ["ai.example"])
-            self.assertEqual(custom_config.cn_domain_suffixes, converter.CN_DOMAIN_SUFFIXES)
-            self.assertEqual(custom_config.easytier_bypass_domains, ["easytier.example"])
+        self.assertEqual(custom_config.ai_domain_suffixes, ["ai.example"])
+        self.assertEqual(custom_config.streaming_domain_suffixes, ["stream.example"])
+        self.assertEqual(custom_config.cn_domain_suffixes, converter.CN_DOMAIN_SUFFIXES)
+        self.assertEqual(custom_config.tun_exclude_uids, [997])
 
     def test_output_path_must_be_below_sing_box_directory(self) -> None:
         allowed_path = converter.SING_BOX_DIR / "generated-test.json"
@@ -189,10 +174,12 @@ class ClashNodesToSingboxErrorHandlingTest(unittest.TestCase):
                 converter.Counter(),
                 {
                     "has_sg_auto": False,
+                    "has_sg_fallback": False,
                     "sg_count": 0,
                     "auto_count": 1,
                     "proxy_default": "Auto",
                     "ai_default": "Auto",
+                    "streaming_default": "Auto",
                 },
             )
 
