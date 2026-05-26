@@ -1,6 +1,6 @@
 # sing-box 本地配置说明
 
-本目录用于独立运行 sing-box，并承载从根目录 `config.yaml` 转换生成的 sing-box 配置。下载缓存、核心文件、Web UI 和生成配置都放在 `sing_box/` 内，避免和 Mihomo 目录互相污染。
+本目录用于独立运行 sing-box，并承载由订阅转换或从根目录 `config.yaml` 提取节点后生成的 sing-box 配置。下载缓存、核心文件、Web UI 和生成配置都放在 `sing_box/` 内，避免和 Mihomo 目录互相污染。
 
 ## 目录结构
 
@@ -12,7 +12,14 @@
 - `Script/update_sing_box_core.sh`：下载并更新 sing-box core 和 Web UI
 - `Script/setup_sing_box_service.sh`：注册或删除 sing-box systemd 服务
 - `Script/download_sing_box_subscription.sh`：通过 subconverter 后端把订阅转换为 sing-box `config.json`
-- `Script/Enhance/convert_mihomo_config.py`：本地兜底转换，把根目录 Mihomo `config.yaml` 转成 sing-box `config.json`
+- `Script/Enhance/clash_nodes_to_singbox.py`：本地兜底转换，从根目录 Mihomo `config.yaml` 提取节点并生成 sing-box `config.json`
+
+## 前提条件
+
+- Linux 系统，TUN 模式和 systemd 服务通常需要 root 权限。
+- `curl`、`tar`、`python3`。
+- 解压 Web UI 的包如果是 zip，需要 `unzip`。
+- 本地兜底转换需要 Python 包 `PyYAML`，缺失时可执行 `python3 -m pip install PyYAML`。
 
 ## 快速开始
 
@@ -52,16 +59,35 @@ chmod +x ./sing_box/Script/*.sh ./sing_box/Script/Enhance/*.py
 ./sing_box/Script/download_sing_box_subscription.sh -u 'https://your-subscribe-link' -p 'udp=true' -p 'emoji=true'
 ```
 
-本地兜底转换当前 Mihomo 配置：
+本地兜底转换当前 Mihomo 配置。该脚本读取根目录 `config.yaml` 的 `proxies`，生成一个保守的 sing-box TUN 配置：
 
 ```bash
-./sing_box/Script/Enhance/convert_mihomo_config.py
+./sing_box/Script/Enhance/clash_nodes_to_singbox.py
+```
+
+如需指定输入、输出、首选节点关键词或默认出站：
+
+```bash
+./sing_box/Script/Enhance/clash_nodes_to_singbox.py ./config.yaml ./sing_box/config.json --prefer 'Singapore,SG,新加坡,狮城' --default-outbound Proxy
+```
+
+严格模式会在遇到不支持或字段不完整的节点时直接失败：
+
+```bash
+./sing_box/Script/Enhance/clash_nodes_to_singbox.py --strict
 ```
 
 检查配置：
 
 ```bash
 ./sing_box/sing-box check -c ./sing_box/config.json
+```
+
+如果当前 shell 设置过代理，建议同时排除本机地址：
+
+```bash
+export NO_PROXY=localhost,127.0.0.1,::1
+export no_proxy=localhost,127.0.0.1,::1
 ```
 
 启动 sing-box：
@@ -105,7 +131,7 @@ sudo ./sing_box/Script/setup_sing_box_service.sh -n sing-box-main --remove
 
 ## Web UI
 
-后端转换得到的配置不一定包含 Web UI 设置。需要局域网访问 UI 时，确认 `sing_box/config.json` 中包含 `experimental.clash_api`。
+后端转换得到的配置不一定包含 Web UI 设置。需要局域网访问 UI 时，确认 `sing_box/config.json` 中包含 `experimental.clash_api`。本地兜底转换脚本会自动写入该配置。
 
 局域网访问通常需要：
 
@@ -133,6 +159,12 @@ http://<LAN-IP>:9090/ui
 
 - 默认推荐使用 `Script/download_sing_box_subscription.sh` 走 subconverter 后端生成 sing-box 配置。
 - `https://sub-web.wcc.best` 和 `https://sublink.dev` 是前端页面，不一定能直接作为脚本 API 后端；脚本需要真实的 subconverter 后端，例如自建 `http://127.0.0.1:25500`。
-- 本地 Python 转换脚本只是兜底方案，优先支持当前仓库实际使用的 Mihomo 配置结构：`ss` 节点、`select` 分组、常见 Clash 规则、DNS、TUN 和 Clash API。
+- 本地 Python 转换脚本只是兜底方案，当前支持从 `proxies` 转换 `anytls`、`trojan`、`ss`/`shadowsocks`、`vmess`、`vless`、`hysteria2`/`hy2`、`tuic`、`socks`/`socks5`、`http` 节点。
+- 本地兜底转换会生成 `tun` 和 `mixed` 入站、`Proxy`/`Auto`/`AI`/`Fallback` 出站、基础 DNS、基础分流规则和 Clash API。完整 CN 分流规则集尚未内置。
+- 本地兜底转换会从 TUN 自动路由中排除 `127.0.0.0/8`、`0.0.0.0/8`、`::1/128`，并强制 `localhost` 和这些本机地址走 `DIRECT`。
+- 本地兜底转换会让 `easytier`、`easytier-cli`、`easytier-core`、`tailscale`、`tailscaled` 进程直连，避免 TUN 模式下 EasyTier 和 Tailscale 流量被代理或 DNS 劫持。
+- shell 中建议同时设置本机地址不走代理：`export NO_PROXY=localhost,127.0.0.1,::1` 和 `export no_proxy=localhost,127.0.0.1,::1`。
+- Shadowsocks `obfs` 插件节点会转换为 `obfs-local` 插件配置，运行环境需要安装 `obfs-local`，否则该类节点运行时会失败。
+- systemd 脚本安装服务时会把当前配置复制到 `/etc/sing-box/<service>.json`，后续修改 `sing_box/config.json` 后需要重新执行安装脚本或手动同步服务配置。
 - 生成的 `sing_box/config.json` 包含节点信息，已在根目录 `.gitignore` 中忽略。
 - `sing_box/ui/`、`sing_box/sing-box`、`sing_box/source/downloads/` 都是生成产物，已忽略。

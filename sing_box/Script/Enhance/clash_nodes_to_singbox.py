@@ -40,6 +40,15 @@ AI_DOMAIN_SUFFIXES = [
 ]
 
 CN_DOMAIN_SUFFIXES = ["cn", "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn"]
+LOCAL_BYPASS_DOMAINS = ["localhost"]
+LOCAL_BYPASS_IP_CIDRS = ["127.0.0.0/8", "0.0.0.0/8", "::1/128"]
+BYPASS_PROCESS_NAMES = [
+    "easytier",
+    "easytier-cli",
+    "easytier-core",
+    "tailscale",
+    "tailscaled",
+]
 
 
 class ConversionError(Exception):
@@ -377,6 +386,7 @@ def build_inbounds() -> list[dict[str, Any]]:
             "mtu": 9000,
             "auto_route": True,
             "strict_route": True,
+            "route_exclude_address": LOCAL_BYPASS_IP_CIDRS,
             "stack": "gvisor",
         },
         {
@@ -403,6 +413,7 @@ def build_dns() -> dict[str, Any]:
             },
         ],
         "rules": [
+            {"domain": LOCAL_BYPASS_DOMAINS, "server": "local"},
             {"domain_suffix": CN_DOMAIN_SUFFIXES, "server": "local"},
             {"domain_suffix": AI_DOMAIN_SUFFIXES, "server": "remote"},
         ],
@@ -432,6 +443,9 @@ def build_route(default_outbound: str, has_sg_auto: bool) -> dict[str, Any]:
         "auto_detect_interface": True,
         "default_domain_resolver": "local",
         "rules": [
+            {"process_name": BYPASS_PROCESS_NAMES, "action": "route", "outbound": "DIRECT"},
+            {"domain": LOCAL_BYPASS_DOMAINS, "action": "route", "outbound": "DIRECT"},
+            {"ip_cidr": LOCAL_BYPASS_IP_CIDRS, "action": "route", "outbound": "DIRECT"},
             {"action": "sniff"},
             {"protocol": "dns", "action": "hijack-dns"},
             {"ip_is_private": True, "action": "route", "outbound": "DIRECT"},
