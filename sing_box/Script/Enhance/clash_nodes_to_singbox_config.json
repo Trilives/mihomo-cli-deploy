@@ -1,0 +1,61 @@
+{
+  "ai_domain_suffixes": [
+    "openai.com",
+    "chatgpt.com",
+    "oaistatic.com",
+    "oaiusercontent.com",
+    "anthropic.com",
+    "claude.ai",
+    "github.com",
+    "githubusercontent.com",
+    "githubassets.com",
+    "github.io",
+    "huggingface.co",
+    "hf.co",
+    "npmjs.com",
+    "npmjs.org",
+    "pypi.org",
+    "pythonhosted.org",
+    "files.pythonhosted.org",
+    "docker.com",
+    "docker.io",
+    "ghcr.io"
+  ],
+  "cn_domain_suffixes": [
+    "cn",
+    "com.cn",
+    "net.cn",
+    "org.cn",
+    "gov.cn",
+    "edu.cn"
+  ],
+  "local_bypass_domains": [
+    "localhost"
+  ],
+  "route_exclude_ip_cidrs": [
+    "127.0.0.0/8",
+    "0.0.0.0/8",
+    "::1/128",
+    "10.0.0.0/8",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fc00::/7",
+    "fe80::/10",
+    "100.64.0.0/10",
+    "fd7a:115c:a1e0::/48",
+    "10.126.126.0/24",
+    "10.14.14.0/24"
+  ],
+  "bypass_process_names": [
+    "easytier",
+    "easytier-cli",
+    "easytier-core",
+    "tailscale",
+    "tailscaled"
+  ],
+  "easytier_bypass_domains": [
+    "easytier.cn",
+    "225284.xyz"
+  ],
+  "easytier_bypass_ip_cidrs": []
+}
