@@ -41,14 +41,6 @@
     "spotify.com",
     "scdn.co"
   ],
-  "cn_domain_suffixes": [
-    "cn",
-    "com.cn",
-    "net.cn",
-    "org.cn",
-    "gov.cn",
-    "edu.cn"
-  ],
   "local_bypass_domains": [
     "localhost"
   ],

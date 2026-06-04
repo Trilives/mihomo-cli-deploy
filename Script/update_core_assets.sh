@@ -11,6 +11,19 @@ META_RULES_REPO="MetaCubeX/meta-rules-dat"
 MIHOMO_REPO="MetaCubeX/mihomo"
 UI_REPO="MetaCubeX/metacubexd"
 
+# GitHub token (optional): authenticates API calls to raise the rate limit from
+# 60/hour to 5000/hour and avoid 403. Priority: existing GITHUB_TOKEN/GH_TOKEN
+# env var, then a GITHUB_TOKEN entry in <root>/.env.
+GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+ENV_FILE="${ROOT_DIR}/.env"
+if [[ -z "${GITHUB_TOKEN}" && -f "${ENV_FILE}" ]]; then
+  GITHUB_TOKEN="$(sed -nE 's/^[[:space:]]*(GITHUB_TOKEN|GH_TOKEN)[[:space:]]*=[[:space:]]*"?([^"[:space:]]+)"?.*$/\2/p' "${ENV_FILE}" | head -n1)"
+fi
+GH_AUTH_HEADER=()
+if [[ -n "${GITHUB_TOKEN}" ]]; then
+  GH_AUTH_HEADER=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+fi
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Error: missing command: $1" >&2
@@ -32,14 +45,48 @@ What it does:
      - country.mmdb
      - geoip.metadb
      - mihomo
+     - mihomo.version
      - ui/
+
+Options:
+  --variant  Prefer a mihomo build variant: standard (default) or compatible.
+             Use compatible for older CPUs without modern instruction sets.
+
+Environment:
+  MIHOMO_VARIANT  Same as --variant when the option is omitted.
 EOF
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
+MIHOMO_VARIANT="${MIHOMO_VARIANT:-standard}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --variant)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --variant requires standard or compatible" >&2
+        exit 1
+      fi
+      MIHOMO_VARIANT="$2"
+      shift 2
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+case "${MIHOMO_VARIANT}" in
+  standard|compatible) ;;
+  *)
+    echo "Error: --variant must be standard or compatible" >&2
+    exit 1
+    ;;
+esac
 
 need_cmd curl
 need_cmd grep
@@ -55,16 +102,20 @@ mkdir -p "${DOWNLOAD_DIR}"
 
 ARCH="$(uname -m)"
 case "${ARCH}" in
-  x86_64) ARCH_PATTERN="amd64|x86_64" ;;
-  aarch64|arm64) ARCH_PATTERN="arm64|aarch64" ;;
-  armv7l|armv7) ARCH_PATTERN="armv7|armv7l" ;;
-  *) ARCH_PATTERN="${ARCH}" ;;
+  x86_64) MIHOMO_ARCH="amd64" ;;
+  aarch64|arm64) MIHOMO_ARCH="arm64" ;;
+  armv7l|armv7) MIHOMO_ARCH="armv7" ;;
+  armv6l|armv6) MIHOMO_ARCH="armv6" ;;
+  i386|i686) MIHOMO_ARCH="386" ;;
+  riscv64) MIHOMO_ARCH="riscv64" ;;
+  s390x) MIHOMO_ARCH="s390x" ;;
+  *) MIHOMO_ARCH="${ARCH}" ;;
 esac
 
 api_assets() {
   local repo="$1"
   local api_url="https://api.github.com/repos/${repo}/releases/latest"
-  curl -fsSL "${api_url}" \
+  curl -fsSL ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "${api_url}" \
     | grep '"browser_download_url"' \
     | sed -E 's/^[[:space:]]*"browser_download_url": "([^"]+)",?$/\1/'
 }
@@ -124,15 +175,29 @@ download_to "${GEOIP_META_URL}" "${GEOIP_META_FILE}"
 install -m 0644 "${COUNTRY_FILE}" "${ROOT_DIR}/country.mmdb"
 install -m 0644 "${GEOIP_META_FILE}" "${ROOT_DIR}/geoip.metadb"
 
-echo "Step 2/4: Download mihomo binary"
-MIHOMO_URL="$(pick_asset "${MIHOMO_REPO}" "linux.*(${ARCH_PATTERN}).*(\\.gz|\\.tgz|\\.tar\\.gz|\\.zip)$")"
-if [[ -z "${MIHOMO_URL}" ]]; then
-  MIHOMO_URL="$(pick_asset "${MIHOMO_REPO}" "linux.*(\\.gz|\\.tgz|\\.tar\\.gz|\\.zip)$")"
+echo "Step 2/4: Download mihomo binary (${MIHOMO_ARCH}, variant: ${MIHOMO_VARIANT})"
+ARCHIVE_EXT='(\.gz|\.tgz|\.tar\.gz|\.zip)'
+# mihomo publishes several amd64 builds (plain, -compatible, -go120). Anchor on
+# "${MIHOMO_ARCH}-v<version>" to deterministically pick the standard build, and
+# fall back to the compatible build, then to any matching arch asset.
+MIHOMO_URL=""
+if [[ "${MIHOMO_VARIANT}" == "compatible" ]]; then
+  MIHOMO_URL="$(pick_asset "${MIHOMO_REPO}" "mihomo-linux-${MIHOMO_ARCH}-compatible-v[0-9][^/]*${ARCHIVE_EXT}$")"
 fi
 if [[ -z "${MIHOMO_URL}" ]]; then
-  echo "Error: failed to find a Linux mihomo asset from ${MIHOMO_REPO} releases" >&2
+  MIHOMO_URL="$(pick_asset "${MIHOMO_REPO}" "mihomo-linux-${MIHOMO_ARCH}-v[0-9][^/]*${ARCHIVE_EXT}$")"
+fi
+if [[ -z "${MIHOMO_URL}" ]]; then
+  MIHOMO_URL="$(pick_asset "${MIHOMO_REPO}" "mihomo-linux-${MIHOMO_ARCH}-compatible-v[0-9][^/]*${ARCHIVE_EXT}$")"
+fi
+if [[ -z "${MIHOMO_URL}" ]]; then
+  MIHOMO_URL="$(pick_asset "${MIHOMO_REPO}" "mihomo-linux-${MIHOMO_ARCH}[^/]*${ARCHIVE_EXT}$")"
+fi
+if [[ -z "${MIHOMO_URL}" ]]; then
+  echo "Error: failed to find a Linux mihomo asset for ${MIHOMO_ARCH} from ${MIHOMO_REPO} releases" >&2
   exit 1
 fi
+MIHOMO_VERSION="$(printf '%s\n' "${MIHOMO_URL}" | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n 1 || true)"
 
 MIHOMO_ARCHIVE="${DOWNLOAD_DIR}/$(basename "${MIHOMO_URL}")"
 download_to "${MIHOMO_URL}" "${MIHOMO_ARCHIVE}"
@@ -150,6 +215,9 @@ if [[ -z "${MIHOMO_BIN}" ]]; then
 fi
 
 install -m 0755 "${MIHOMO_BIN}" "${ROOT_DIR}/mihomo"
+if [[ -n "${MIHOMO_VERSION}" ]]; then
+  printf '%s\n' "${MIHOMO_VERSION}" > "${ROOT_DIR}/mihomo.version"
+fi
 
 echo "Step 3/4: Download UI package"
 UI_URL="$(pick_asset "${UI_REPO}" "(gh-pages|dist).*(\\.zip|\\.tar\\.gz|\\.tgz)$")"
@@ -170,7 +238,7 @@ extract_archive "${UI_ARCHIVE}" "${UI_EXTRACT_DIR}"
 UI_ROOT=""
 while IFS= read -r idx; do
   candidate="$(dirname "${idx}")"
-  if [[ -d "${candidate}/_nuxt" ]]; then
+  if [[ -d "${candidate}/assets" || -d "${candidate}/_nuxt" ]]; then
     UI_ROOT="${candidate}"
     break
   fi
@@ -197,5 +265,7 @@ echo "Done. Updated files:"
 echo "  - ${ROOT_DIR}/country.mmdb"
 echo "  - ${ROOT_DIR}/geoip.metadb"
 echo "  - ${ROOT_DIR}/mihomo"
+[[ -n "${MIHOMO_VERSION}" ]] && echo "  - ${ROOT_DIR}/mihomo.version (${MIHOMO_VERSION})"
 echo "  - ${ROOT_DIR}/ui"
 echo "Downloads cached in: ${DOWNLOAD_DIR}"
+"${ROOT_DIR}/mihomo" -v 2>/dev/null | head -n 1 || true

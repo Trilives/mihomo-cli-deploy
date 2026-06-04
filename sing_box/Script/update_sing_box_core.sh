@@ -7,10 +7,27 @@ SING_BOX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SOURCE_DIR="${SING_BOX_DIR}/source"
 DOWNLOAD_DIR="${SOURCE_DIR}/downloads"
 UI_DIR="${SING_BOX_DIR}/ui"
+RULESET_DIR="${SING_BOX_DIR}/ruleset"
 
 SING_BOX_REPO="SagerNet/sing-box"
 UI_REPO="MetaCubeX/metacubexd"
 LIBC_VARIANT="${SING_BOX_LIBC:-glibc}"
+GEOSITE_CN_URL="https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs"
+GEOIP_CN_URL="https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs"
+
+# GitHub token (optional): authenticates API calls to raise the rate limit from
+# 60/hour to 5000/hour and avoid 403. Priority: existing GITHUB_TOKEN/GH_TOKEN
+# env var, then a GITHUB_TOKEN entry in the repo-root .env.
+REPO_ROOT="$(cd "${SING_BOX_DIR}/.." && pwd)"
+GITHUB_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+ENV_FILE="${REPO_ROOT}/.env"
+if [[ -z "${GITHUB_TOKEN}" && -f "${ENV_FILE}" ]]; then
+  GITHUB_TOKEN="$(sed -nE 's/^[[:space:]]*(GITHUB_TOKEN|GH_TOKEN)[[:space:]]*=[[:space:]]*"?([^"[:space:]]+)"?.*$/\2/p' "${ENV_FILE}" | head -n1)"
+fi
+GH_AUTH_HEADER=()
+if [[ -n "${GITHUB_TOKEN}" ]]; then
+  GH_AUTH_HEADER=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+fi
 
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -27,10 +44,15 @@ Usage:
 What it does:
   1) Download the latest Linux sing-box binary from SagerNet/sing-box.
   2) Download the latest MetaCubeXD Web UI package.
-  3) Save all downloads in sing_box/source/downloads.
-  4) Deploy sing-box files to workspace sing_box/:
+  3) Download official SagerNet CN rule sets:
+      - SagerNet/sing-geosite: geosite-cn.srs
+      - SagerNet/sing-geoip: geoip-cn.srs
+  4) Save all downloads in sing_box/source/downloads.
+  5) Deploy sing-box files to workspace sing_box/:
       - sing-box
       - sing-box.version
+      - ruleset/geosite-cn.srs
+      - ruleset/geoip-cn.srs
       - ui/
 
 Options:
@@ -86,6 +108,7 @@ need_cmd rm
 
 mkdir -p "${DOWNLOAD_DIR}"
 mkdir -p "${SING_BOX_DIR}"
+mkdir -p "${RULESET_DIR}"
 
 ARCH="$(uname -m)"
 case "${ARCH}" in
@@ -102,7 +125,7 @@ esac
 api_assets() {
   local repo="$1"
   local api_url="https://api.github.com/repos/${repo}/releases/latest"
-  curl -fsSL "${api_url}" \
+  curl -fsSL ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "${api_url}" \
     | grep '"browser_download_url"' \
     | sed -E 's/^[[:space:]]*"browser_download_url": "([^"]+)",?$/\1/'
 }
@@ -110,7 +133,7 @@ api_assets() {
 latest_tag() {
   local repo="$1"
   local api_url="https://api.github.com/repos/${repo}/releases/latest"
-  curl -fsSL "${api_url}" \
+  curl -fsSL ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "${api_url}" \
     | grep '"tag_name"' \
     | sed -E 's/^[[:space:]]*"tag_name": "([^"]+)",?$/\1/' \
     | head -n 1
@@ -156,7 +179,7 @@ extract_archive() {
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-echo "Step 1/4: Find latest Linux sing-box asset"
+echo "Step 1/5: Find latest Linux sing-box asset"
 SING_BOX_VERSION="$(latest_tag "${SING_BOX_REPO}")"
 SING_BOX_URL=""
 if [[ "${LIBC_VARIANT}" == "any" ]]; then
@@ -179,7 +202,7 @@ fi
 SING_BOX_ARCHIVE="${DOWNLOAD_DIR}/$(basename "${SING_BOX_URL}")"
 download_to "${SING_BOX_URL}" "${SING_BOX_ARCHIVE}"
 
-echo "Step 2/4: Deploy sing-box binary"
+echo "Step 2/5: Deploy sing-box binary"
 SING_BOX_EXTRACT_DIR="${TMP_DIR}/sing-box"
 mkdir -p "${SING_BOX_EXTRACT_DIR}"
 tar -xzf "${SING_BOX_ARCHIVE}" -C "${SING_BOX_EXTRACT_DIR}"
@@ -193,7 +216,15 @@ fi
 install -m 0755 "${SING_BOX_BIN}" "${SING_BOX_DIR}/sing-box"
 printf '%s\n' "${SING_BOX_VERSION}" > "${SING_BOX_DIR}/sing-box.version"
 
-echo "Step 3/4: Download latest Web UI asset"
+echo "Step 3/5: Download official CN rule sets"
+GEOSITE_CN_DOWNLOAD="${DOWNLOAD_DIR}/geosite-cn.srs"
+GEOIP_CN_DOWNLOAD="${DOWNLOAD_DIR}/geoip-cn.srs"
+download_to "${GEOSITE_CN_URL}" "${GEOSITE_CN_DOWNLOAD}"
+download_to "${GEOIP_CN_URL}" "${GEOIP_CN_DOWNLOAD}"
+install -m 0644 "${GEOSITE_CN_DOWNLOAD}" "${RULESET_DIR}/geosite-cn.srs"
+install -m 0644 "${GEOIP_CN_DOWNLOAD}" "${RULESET_DIR}/geoip-cn.srs"
+
+echo "Step 4/5: Download latest Web UI asset"
 UI_URL="$(pick_asset "${UI_REPO}" "(gh-pages|dist).*(\.zip|\.tar\.gz|\.tgz)$")"
 if [[ -z "${UI_URL}" ]]; then
   UI_URL="$(pick_asset "${UI_REPO}" "(\.zip|\.tar\.gz|\.tgz)$")"
@@ -206,7 +237,7 @@ fi
 UI_ARCHIVE="${DOWNLOAD_DIR}/$(basename "${UI_URL}")"
 download_to "${UI_URL}" "${UI_ARCHIVE}"
 
-echo "Step 4/4: Deploy Web UI"
+echo "Step 5/5: Deploy Web UI"
 UI_EXTRACT_DIR="${TMP_DIR}/ui"
 extract_archive "${UI_ARCHIVE}" "${UI_EXTRACT_DIR}"
 
@@ -238,6 +269,8 @@ cp -a "${UI_ROOT}/." "${UI_DIR}/"
 echo "Done. Updated files:"
 echo "  - ${SING_BOX_DIR}/sing-box"
 echo "  - ${SING_BOX_DIR}/sing-box.version"
+echo "  - ${RULESET_DIR}/geosite-cn.srs"
+echo "  - ${RULESET_DIR}/geoip-cn.srs"
 echo "  - ${UI_DIR}"
 echo "Downloads cached in: ${DOWNLOAD_DIR}"
 echo "Open UI: http://<LAN-IP>:9090/ui"

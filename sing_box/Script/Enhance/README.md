@@ -6,7 +6,6 @@
 
 - `clash_nodes_to_singbox.py`：转换 Clash/Mihomo 节点为 sing-box `config.json`。
 - `clash_nodes_to_singbox_config.json`：转换脚本的自定义配置文件，用于调整 DNS、路由、直连进程和 TUN UID 排除规则。
-- `test_clash_nodes_to_singbox.py`：转换脚本的单元测试。
 
 ## 基本用法
 
@@ -19,6 +18,7 @@
 - 输入：`./config.yaml`
 - 输出：`./sing_box/config.json`
 - 自定义配置：`./sing_box/Script/Enhance/clash_nodes_to_singbox_config.json`
+- CN 规则集：`./sing_box/ruleset/geosite-cn.srs` 和 `./sing_box/ruleset/geoip-cn.srs`
 
 也可以显式指定路径：
 
@@ -38,11 +38,53 @@
 
 - `ai_domain_suffixes`：走 `AI` 出站的域名后缀。
 - `streaming_domain_suffixes`：走 `Streaming` 出站的流媒体域名后缀。
-- `cn_domain_suffixes`：本地 DNS 和 `DIRECT` 路由的国内域名后缀。
 - `local_bypass_domains`：本地直连域名。
 - `route_exclude_ip_cidrs`：TUN 自动路由排除网段，同时会生成直连路由规则。
 - `bypass_process_names`：直连进程名，例如 `tailscaled`。
 - `tun_exclude_uids`：写入 TUN 入站的 `exclude_uid`，用于让指定系统用户的流量绕过 sing-box 自动路由。
+
+## CN 规则集
+
+转换脚本不再使用手写的 `.cn` 域名后缀列表做国内分流，而是生成 sing-box 官方推荐的 `rule_set` 配置：
+
+- `geosite-cn`：用于国内域名 DNS 本地解析和路由直连。
+- `geoip-cn`：用于国内 IP 路由直连。
+
+规则集文件由 `./sing_box/Script/update_sing_box_core.sh` 下载自 SagerNet 维护的官方仓库：
+
+- `SagerNet/sing-geosite`：`geosite-cn.srs`
+- `SagerNet/sing-geoip`：`geoip-cn.srs`
+
+## 每周自动更新
+
+本仓库采用本地 `rule_set`（`type: local`），规则集启动时一次性读入，因此需要定期更新 `.srs` 文件并重启服务才能保持新鲜。`sing_box/Script/` 下提供了两个脚本来自动化这一流程：
+
+- `update_and_redeploy.sh`：依次执行 `update_sing_box_core.sh`（更新内核、Web UI、`geosite-cn.srs`/`geoip-cn.srs`）和 `setup_sing_box_service.sh`（重装 config 并重启服务，使新内核和新规则集生效）。额外参数会透传给 `update_sing_box_core.sh`，例如 `--libc musl`。
+- `setup_weekly_update_timer.sh`：安装一个 systemd timer，默认每周一 03:00 运行 `update_and_redeploy.sh`。
+
+安装定时任务（需要 root）：
+
+```bash
+sudo ./sing_box/Script/setup_weekly_update_timer.sh
+```
+
+特性说明：
+
+- `OnCalendar=Mon *-*-* 03:00:00`：每周一 03:00 触发，可用 `--on-calendar` 自定义。
+- `Persistent=true`：关机错过的那次会在下次开机后补跑。
+- `RandomizedDelaySec=30min`：随机抖动，避开 GitHub 整点拉取高峰，可用 `--delay` 调整。
+- `After=network-online.target`：联网后才执行。
+
+常用操作：
+
+```bash
+sudo systemctl start sing-box-update.service     # 立即手动跑一次验证
+journalctl -u sing-box-update.service -f         # 跟踪日志
+systemctl list-timers sing-box-update.timer      # 查看下次执行时间
+sudo ./sing_box/Script/setup_weekly_update_timer.sh --remove   # 卸载定时任务
+```
+
+> 注意：该流程只更新内核、UI 和规则集，不会重新生成 `config.json`（节点不变）。订阅节点变化仍需手动运行 `clash_nodes_to_singbox.py`。如果服务是用 `setup_sing_box_service.sh -n <自定义名>` 安装的，需要相应调整。
 
 ## 出站分组
 
@@ -68,12 +110,6 @@ EasyTier 的 P2P peer IP 是动态发现的，不应靠 `easytier_bypass_domains
 这样可以保留 sing-box `strict_route`，同时让 EasyTier 动态 P2P 数据面稳定走物理网卡。
 
 ## 校验
-
-运行单元测试：
-
-```bash
-python3 -m unittest sing_box.Script.Enhance.test_clash_nodes_to_singbox
-```
 
 生成配置后校验 sing-box 配置：
 

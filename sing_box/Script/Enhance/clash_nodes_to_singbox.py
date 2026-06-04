@@ -31,6 +31,9 @@ SG_EXCLUDE_KEYWORDS = ("实验",)
 INFO_NODE_PREFIXES = ("traffic:", "expire:", "剩余流量", "过期时间")
 SING_BOX_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CUSTOM_CONFIG_PATH = Path(__file__).with_name("clash_nodes_to_singbox_config.json")
+RULESET_DIR_NAME = "sing_box/ruleset"
+GEOSITE_CN_RULE_SET_TAG = "geosite-cn"
+GEOIP_CN_RULE_SET_TAG = "geoip-cn"
 
 AI_DOMAIN_SUFFIXES = [
     "openai.com",
@@ -75,7 +78,6 @@ STREAMING_DOMAIN_SUFFIXES = [
     "scdn.co",
 ]
 
-CN_DOMAIN_SUFFIXES = ["cn", "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn"]
 LOCAL_BYPASS_DOMAINS = ["localhost"]
 LOCAL_BYPASS_IP_CIDRS = ["127.0.0.0/8", "0.0.0.0/8", "::1/128"]
 # Do not exclude 172.16.0.0/12: it contains the TUN-derived DNS address 172.19.0.2.
@@ -103,7 +105,6 @@ BYPASS_PROCESS_NAMES = [
 class CustomConfig(NamedTuple):
     ai_domain_suffixes: list[str]
     streaming_domain_suffixes: list[str]
-    cn_domain_suffixes: list[str]
     local_bypass_domains: list[str]
     route_exclude_ip_cidrs: list[str]
     bypass_process_names: list[str]
@@ -113,7 +114,6 @@ class CustomConfig(NamedTuple):
 DEFAULT_CUSTOM_CONFIG = CustomConfig(
     ai_domain_suffixes=AI_DOMAIN_SUFFIXES,
     streaming_domain_suffixes=STREAMING_DOMAIN_SUFFIXES,
-    cn_domain_suffixes=CN_DOMAIN_SUFFIXES,
     local_bypass_domains=LOCAL_BYPASS_DOMAINS,
     route_exclude_ip_cidrs=ROUTE_EXCLUDE_IP_CIDRS,
     bypass_process_names=BYPASS_PROCESS_NAMES,
@@ -191,8 +191,6 @@ def load_custom_config(path: Path) -> CustomConfig:
             data.get("streaming_domain_suffixes"), "streaming_domain_suffixes"
         )
         or STREAMING_DOMAIN_SUFFIXES,
-        cn_domain_suffixes=normalize_string_list(data.get("cn_domain_suffixes"), "cn_domain_suffixes")
-        or CN_DOMAIN_SUFFIXES,
         local_bypass_domains=normalize_string_list(data.get("local_bypass_domains"), "local_bypass_domains")
         or LOCAL_BYPASS_DOMAINS,
         route_exclude_ip_cidrs=normalize_string_list(data.get("route_exclude_ip_cidrs"), "route_exclude_ip_cidrs")
@@ -289,6 +287,14 @@ def require_fields(proxy: dict[str, Any], fields: list[str]) -> str | None:
     return None
 
 
+def parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def base_outbound(proxy: dict[str, Any], tag: str, outbound_type: str) -> dict[str, Any]:
     server = proxy.get("server")
     port = normalize_port(proxy.get("server_port", proxy.get("port")))
@@ -305,20 +311,51 @@ def base_outbound(proxy: dict[str, Any], tag: str, outbound_type: str) -> dict[s
 
 
 def tls_config(proxy: dict[str, Any], default_enabled: bool = False) -> dict[str, Any] | None:
-    enabled = bool(proxy.get("tls", default_enabled))
+    enabled = parse_bool(proxy.get("tls", default_enabled))
     server_name = proxy.get("servername") or proxy.get("server_name") or proxy.get("sni")
     insecure = proxy.get("skip-cert-verify")
     alpn = proxy.get("alpn")
     fingerprint = proxy.get("client-fingerprint") or proxy.get("fingerprint")
+    certificate_path = proxy.get("ca") or proxy.get("certificate_path")
+    certificate = proxy.get("ca-str") or proxy.get("certificate")
+    client_certificate_path = proxy.get("client-cert") or proxy.get("client_certificate_path")
+    client_certificate = proxy.get("client-cert-str") or proxy.get("client_certificate")
+    client_key_path = proxy.get("client-key") or proxy.get("client_key_path")
+    client_key = proxy.get("client-key-str") or proxy.get("client_key")
 
-    if not enabled and not server_name and insecure is None and not alpn and not fingerprint:
+    if (
+        not enabled
+        and not server_name
+        and insecure is None
+        and not alpn
+        and not fingerprint
+        and not certificate_path
+        and not certificate
+        and not client_certificate_path
+        and not client_certificate
+        and not client_key_path
+        and not client_key
+    ):
         return None
 
-    tls: dict[str, Any] = {"enabled": enabled or bool(server_name or alpn or fingerprint)}
+    tls: dict[str, Any] = {
+        "enabled": enabled
+        or bool(
+            server_name
+            or alpn
+            or fingerprint
+            or certificate_path
+            or certificate
+            or client_certificate_path
+            or client_certificate
+            or client_key_path
+            or client_key
+        )
+    }
     if server_name:
         tls["server_name"] = str(server_name)
     if insecure is not None:
-        tls["insecure"] = bool(insecure)
+        tls["insecure"] = parse_bool(insecure)
     if isinstance(alpn, list):
         tls["alpn"] = [str(item) for item in alpn]
     elif isinstance(alpn, str) and alpn:
@@ -326,6 +363,18 @@ def tls_config(proxy: dict[str, Any], default_enabled: bool = False) -> dict[str
     if fingerprint:
         # sing-box 1.13 still supports TLS uTLS. Keep only the conservative fingerprint mapping.
         tls["utls"] = {"enabled": True, "fingerprint": str(fingerprint)}
+    if certificate_path:
+        tls["certificate_path"] = str(certificate_path)
+    if certificate:
+        tls["certificate"] = str(certificate)
+    if client_certificate_path:
+        tls["client_certificate_path"] = str(client_certificate_path)
+    if client_certificate:
+        tls["client_certificate"] = str(client_certificate)
+    if client_key_path:
+        tls["client_key_path"] = str(client_key_path)
+    if client_key:
+        tls["client_key"] = str(client_key)
     return tls
 
 
@@ -447,18 +496,37 @@ def convert_trojan(proxy: dict[str, Any], tag: str) -> dict[str, Any]:
 
 
 def convert_shadowsocks(proxy: dict[str, Any], tag: str) -> dict[str, Any]:
-    reason = require_fields(proxy, ["server", "cipher", "password"])
+    method = proxy.get("cipher") or proxy.get("method")
+    if method in (None, ""):
+        raise ConversionError("missing cipher")
+    reason = require_fields(proxy, ["server", "password"])
     if reason:
         raise ConversionError(reason)
     outbound = base_outbound(proxy, tag, "shadowsocks")
-    outbound["method"] = str(proxy["cipher"])
+    outbound["method"] = str(method)
     outbound["password"] = str(proxy["password"])
+    if proxy.get("udp") is not None and not parse_bool(proxy.get("udp")):
+        outbound["network"] = "tcp"
     plugin = str(proxy.get("plugin") or "").lower()
     if plugin:
-        if plugin != "obfs":
-            raise ConversionError(f"unsupported shadowsocks plugin {plugin}")
         raw_opts = proxy.get("plugin-opts")
         opts: dict[str, Any] = raw_opts if isinstance(raw_opts, dict) else {}
+        if plugin == "v2ray-plugin":
+            mode = str(opts.get("mode") or "websocket").lower()
+            if mode not in {"websocket", "quic"}:
+                raise ConversionError(f"unsupported shadowsocks v2ray-plugin mode {mode}")
+            plugin_opts = [f"mode={mode}"]
+            if parse_bool(opts.get("tls")):
+                plugin_opts.append("tls")
+            for source_key, plugin_key in (("host", "host"), ("path", "path")):
+                value = opts.get(source_key)
+                if value:
+                    plugin_opts.append(f"{plugin_key}={value}")
+            outbound["plugin"] = "v2ray-plugin"
+            outbound["plugin_opts"] = ";".join(plugin_opts)
+            return outbound
+        if plugin != "obfs":
+            raise ConversionError(f"unsupported shadowsocks plugin {plugin}")
         mode = str(opts.get("mode") or "http").lower()
         host = opts.get("host")
         if mode not in {"http", "tls"}:
@@ -590,9 +658,9 @@ def build_inbounds(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> list[
 def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, Any]:
     rules = [
         {"domain": custom_config.local_bypass_domains, "server": "local"},
-        {"domain_suffix": custom_config.cn_domain_suffixes, "server": "local"},
         {"domain_suffix": custom_config.ai_domain_suffixes, "server": "remote"},
         {"domain_suffix": custom_config.streaming_domain_suffixes, "server": "remote"},
+        {"rule_set": GEOSITE_CN_RULE_SET_TAG, "server": "local"},
     ]
     return {
         "servers": [
@@ -626,6 +694,23 @@ def build_experimental(output_path: Path) -> dict[str, Any]:
     }
 
 
+def build_rule_sets() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "local",
+            "tag": GEOSITE_CN_RULE_SET_TAG,
+            "format": "binary",
+            "path": f"{RULESET_DIR_NAME}/geosite-cn.srs",
+        },
+        {
+            "type": "local",
+            "tag": GEOIP_CN_RULE_SET_TAG,
+            "format": "binary",
+            "path": f"{RULESET_DIR_NAME}/geoip-cn.srs",
+        },
+    ]
+
+
 def build_route(
     default_outbound: str,
     has_sg_auto: bool,
@@ -645,15 +730,18 @@ def build_route(
             {"ip_is_private": True, "action": "route", "outbound": "DIRECT"},
             {"domain_suffix": custom_config.ai_domain_suffixes, "action": "route", "outbound": "AI"},
             {"domain_suffix": custom_config.streaming_domain_suffixes, "action": "route", "outbound": "Streaming"},
-            {"domain_suffix": custom_config.cn_domain_suffixes, "action": "route", "outbound": "DIRECT"},
-            # TODO: For complete CN split routing, add sing-box rule_set files later.
-            # The old geoip/geosite fields are intentionally not emitted for 1.13+ compatibility.
+            {
+                "rule_set": [GEOSITE_CN_RULE_SET_TAG, GEOIP_CN_RULE_SET_TAG],
+                "action": "route",
+                "outbound": "DIRECT",
+            },
         ]
     )
     return {
         "auto_detect_interface": True,
         "default_domain_resolver": "local",
         "rules": rules,
+        "rule_set": build_rule_sets(),
         "final": default_outbound,
     }
 
