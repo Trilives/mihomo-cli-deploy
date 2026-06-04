@@ -1,3 +1,8 @@
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+
 # Runtime files
 .run/
 cache.db
@@ -20,6 +25,7 @@ sing_box/source/*.gz
 
 # Upstream downloadable assets (large binaries)
 mihomo
+mihomo.version
 sing_box/sing-box
 sing_box/sing-box.version
 sing_box/config.json

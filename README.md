@@ -46,9 +46,24 @@ source/downloads/  # 下载缓存
 ./Script/update_core_assets.sh
 ```
 
-该脚本从上游发布页下载适合当前 Linux 架构的 Mihomo 核心、MetaCubeXD Web UI、`country.mmdb` 和 `geoip.metadb`，并部署到仓库根目录。
+该脚本从上游发布页下载适合当前 Linux 架构的 Mihomo 核心、MetaCubeXD Web UI、`country.mmdb` 和 `geoip.metadb`，并部署到仓库根目录，同时把版本号写入 `mihomo.version`。
 
 后续更新核心和 Web UI 时，可再次执行同一命令。
+
+老 CPU 缺少现代指令集时，可改用 compatible 构建：
+
+```bash
+./Script/update_core_assets.sh --variant compatible
+```
+
+**GitHub 限流（可选但推荐）**：脚本通过 GitHub API 查询最新版本，匿名访问限流为 60 次/小时，容易触发 `403`。可在仓库根目录的 `.env` 中放置一个 token（参考 `.env.example`），脚本会自动读取并鉴权（限流提升到 5000 次/小时）：
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入 GITHUB_TOKEN=github_pat_xxx（只需公共读取权限）
+```
+
+`.env` 已被 `.gitignore` 忽略，不会提交；也可改用环境变量 `GITHUB_TOKEN`/`GH_TOKEN`。
 
 ### 2. 生成 `config.yaml`
 
@@ -135,6 +150,10 @@ sudo ./mihomo -d .
 sudo ./Script/setup_mihomo_service.sh
 ```
 
+安装脚本会在发现 dashboard 未完整开启时，自动补齐 `allow-lan`、`external-controller` 和 `external-ui`，并在缺少面板密码时生成一个随机 `secret`，以便 Web UI 能正常进入节点选择；它不会替你改动现有订阅节点或手工编写的代理分组。
+
+**自包含运行时目录**：脚本会把运行所需文件（二进制、`<服务名>.yaml`、`country.mmdb`、`geoip.metadb`、`ui/`）暂存到 `/etc/mihomo`，服务以 `mihomo -d /etc/mihomo -f /etc/mihomo/<服务名>.yaml` 运行。这样服务与仓库路径、运行用户解耦，避免源码位于 `/home` 时的目录遍历权限问题。安装前会用 `mihomo -t` 校验暂存配置。
+
 服务管理命令：
 
 ```bash
@@ -144,16 +163,40 @@ sudo systemctl restart mihomo
 sudo ./Script/setup_mihomo_service.sh --remove
 ```
 
+`--remove` 会停止并删除服务，同时清理该服务在 `/etc/mihomo` 下的暂存配置；当目录中已无其它受管服务时，连同共享文件（二进制、geo、ui）一并删除。
+
 可选参数：
 
 ```bash
 # 仅设置开机自启，不立即启动
 sudo ./Script/setup_mihomo_service.sh --no-start
 
-# 使用自定义服务名
+# 使用自定义服务名（暂存为 /etc/mihomo/<名>.yaml，可多服务共存）
 sudo ./Script/setup_mihomo_service.sh -n mihomo-main
 sudo ./Script/setup_mihomo_service.sh -n mihomo-main --remove
+
+# 自定义运行时目录
+sudo ./Script/setup_mihomo_service.sh -d /opt/mihomo
 ```
+
+### 7. 每周自动更新（可选）
+
+`update_and_redeploy.sh` 会依次执行 `update_core_assets.sh`（更新核心、Web UI、geo 数据）和 `setup_mihomo_service.sh`（重新暂存并重启服务）。`setup_weekly_update_timer.sh` 则安装一个 systemd timer，默认每周一 03:00 自动跑前者。
+
+```bash
+sudo ./Script/setup_weekly_update_timer.sh
+```
+
+特性：每周一 03:00 触发（`--on-calendar` 可改）、`Persistent=true`（关机错过的会开机补跑）、`RandomizedDelaySec=30min`（错峰、避免 GitHub 限流，`--delay` 可调）。
+
+```bash
+sudo systemctl start mihomo-update.service        # 立即手动跑一次
+journalctl -u mihomo-update.service -f            # 跟踪日志
+systemctl list-timers mihomo-update.timer         # 查看下次执行时间
+sudo ./Script/setup_weekly_update_timer.sh --remove   # 卸载定时任务
+```
+
+> 提示：该流程只更新核心/UI/geo，不会重新下载订阅（节点不变）；订阅更新仍需手动跑下载或转换脚本。mihomo 与 sing-box 服务互斥，请只安装与当前运行栈对应的 timer。
 
 ## 可选：追加地区测速或故障切换分组
 
@@ -176,8 +219,9 @@ python3 ./Script/Enhance/add_sg_fallback.py
 
 ## 更新与安全注意事项
 
-- 更新核心和 Web UI：重新运行 `./Script/update_core_assets.sh`。
+- 更新核心和 Web UI：重新运行 `./Script/update_core_assets.sh`，或安装每周定时器自动更新（见上文「每周自动更新」）。
 - 更新订阅：重新运行下载或转换脚本；该操作会替换 `config.yaml`。
+- `.env` 用于存放 `GITHUB_TOKEN` 等本地密钥，已被 `.gitignore` 忽略，切勿提交；token 一旦泄露应立即在 GitHub 重置。
 - `config.yaml` 和 `sing_box/config.json` 通常包含节点凭证，不要提交到公开仓库，也不要在问题报告中直接粘贴。
 - 订阅链接本身可能包含 token；终端历史、截图和日志分享前应检查并打码。
 - 对外开放 Web UI 时请配置访问密码，并限制管理端口的可访问范围。
