@@ -167,7 +167,9 @@ sudo ./mihomo -d .
 sudo ./Script/setup_mihomo_service.sh
 ```
 
-安装脚本会在发现 dashboard 未完整开启时，自动补齐 `allow-lan`、`external-controller` 和 `external-ui`，并在缺少面板密码时生成一个随机 `secret`，以便 Web UI 能正常进入节点选择；它不会替你改动现有订阅节点或手工编写的代理分组。
+安装脚本会在发现 dashboard 未完整配置时，自动补齐 `external-controller`、`external-ui`，并在缺少面板密码时生成一个随机 `secret`，以便 Web UI 能正常进入节点选择；它不会替你改动现有订阅节点或手工编写的代理分组，已设置的 `external-controller` 监听地址也会保留。
+
+`allow-lan` 默认写为 `false`（代理端口仅本机可用，面板始终绑定本地地址）。如需让局域网内其他设备把本机当代理使用，在根目录 `.env` 中设置 `ALLOW_LAN=true`（参考 `.env.example`），或临时用环境变量 `ALLOW_LAN=true sudo ./Script/setup_mihomo_service.sh`。注意这只影响代理端口是否对局域网开放，与面板是否暴露无关——面板暴露由 `external-controller` 的监听地址决定（见第 3 节）。
 
 **自包含运行时目录**：脚本会把运行所需文件（二进制、`<服务名>.yaml`、`country.mmdb`、`geoip.metadb`、`ui/`）暂存到 `/etc/mihomo`，服务以 `mihomo -d /etc/mihomo -f /etc/mihomo/<服务名>.yaml` 运行。这样服务与仓库路径、运行用户解耦，避免源码位于 `/home` 时的目录遍历权限问题。安装前会用 `mihomo -t` 校验暂存配置。
 

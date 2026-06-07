@@ -106,6 +106,24 @@ if ! command -v systemctl >/dev/null 2>&1; then
   exit 1
 fi
 
+REPO_ROOT="$(cd "${SING_BOX_DIR}/.." && pwd)"
+ENV_FILE="${REPO_ROOT}/.env"
+env_value() {
+  local key_regex="$1"
+  [[ -f "${ENV_FILE}" ]] || return 0
+  sed -nE "s/^[[:space:]]*(${key_regex})[[:space:]]*=[[:space:]]*\"?([^\"[:space:]]+)\"?.*$/\\2/p" "${ENV_FILE}" | head -n1
+}
+
+# Whether to expose the Clash API / Web UI panel to the LAN. sing-box keeps the
+# proxy inbound bound to loopback regardless; this only flips the panel between
+# 0.0.0.0:9090 (LAN) and 127.0.0.1:9090 (local only). Priority: ALLOW_LAN env
+# var, then an ALLOW_LAN entry in the repo-root .env. Default: false (local only).
+ALLOW_LAN_RAW="${ALLOW_LAN:-$(env_value 'ALLOW_LAN')}"
+case "${ALLOW_LAN_RAW,,}" in
+  1|true|yes|on) ALLOW_LAN="true" ;;
+  *) ALLOW_LAN="false" ;;
+esac
+
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 RUNTIME_BIN_PATH="${RUNTIME_DIR}/sing-box"
 RUNTIME_CONFIG_PATH="${RUNTIME_DIR}/${SERVICE_NAME}.json"
@@ -241,8 +259,20 @@ cache_file["path"] = str(cache_path)
 experimental["cache_file"] = cache_file
 
 clash_api = experimental.get("clash_api")
-if isinstance(clash_api, dict) and clash_api.get("external_ui"):
-    clash_api["external_ui"] = str(ui_dir)
+if isinstance(clash_api, dict):
+    if clash_api.get("external_ui"):
+        clash_api["external_ui"] = str(ui_dir)
+    # Bind the panel to the LAN only when ALLOW_LAN=true; otherwise keep it on
+    # loopback. Preserve whatever port was configured and only swap the host.
+    allow_lan = "${ALLOW_LAN}" == "true"
+    current = clash_api.get("external_controller") or "127.0.0.1:9090"
+    port = current.rsplit(":", 1)[-1] if ":" in current else "9090"
+    host = "0.0.0.0" if allow_lan else "127.0.0.1"
+    clash_api["external_controller"] = f"{host}:{port}"
+    if allow_lan:
+        clash_api["access_control_allow_private_network"] = True
+    else:
+        clash_api.pop("access_control_allow_private_network", None)
 data["experimental"] = experimental
 
 route = data.get("route")
@@ -256,6 +286,12 @@ config_path.write_text(
     encoding="utf-8",
 )
 PY
+
+if [[ "${ALLOW_LAN}" == "true" ]]; then
+  echo "面板已开放到局域网 (ALLOW_LAN=true): external_controller 监听 0.0.0.0"
+else
+  echo "面板仅本机可访问 (ALLOW_LAN=false): external_controller 监听 127.0.0.1"
+fi
 
 if [[ "${RUN_USER}" == "root" ]]; then
   install -o root -g root -m 0644 /dev/null "${RUNTIME_CACHE_PATH}"

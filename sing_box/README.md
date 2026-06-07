@@ -155,6 +155,8 @@ ssh -N -L 9090:127.0.0.1:9090 user@server   # 在本地机器执行，再访问 
 
 确有需要开放到局域网时，可在 `clash_nodes_to_singbox_config.json` 中设置 `"lan_panel": true`（或转换时加 `--lan-panel`），脚本会把面板改为监听 `0.0.0.0:9090` 并放行私有网络访问。开放后请务必设置 `secret`，避免同网段设备直接控制代理，并按需配置防火墙。
 
+安装服务时也可控制面板暴露：`setup_sing_box_service.sh` 会按仓库根目录 `.env` 中的 `ALLOW_LAN`（默认 `false`，参考 `.env.example`）重写暂存配置的 `external_controller`——`false` 强制回 `127.0.0.1:9090`，`true` 改为 `0.0.0.0:9090` 并放行私有网络访问（原有端口保留）。也可临时用环境变量：`ALLOW_LAN=true sudo ./sing_box/Script/setup_sing_box_service.sh`。注意 sing-box 的代理 inbound 始终监听回环，此开关只影响面板。
+
 ## 注意事项
 
 - 默认推荐使用 `Script/download_sing_box_subscription.sh` 走 subconverter 后端生成 sing-box 配置。
