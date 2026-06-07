@@ -24,6 +24,88 @@ if [[ -n "${GITHUB_TOKEN}" ]]; then
   GH_AUTH_HEADER=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
+env_value() {
+  local key_regex="$1"
+  [[ -f "${ENV_FILE}" ]] || return 0
+  sed -nE "s/^[[:space:]]*(${key_regex})[[:space:]]*=[[:space:]]*\"?([^\"[:space:]]+)\"?.*$/\\2/p" "${ENV_FILE}" | head -n1
+}
+
+# Download proxy (optional): point this at a proxy reachable on your LAN so the
+# update can fetch GitHub through a device that already has good connectivity,
+# for example http://192.168.2.7:7897 or socks5h://192.168.2.7:7897. Priority:
+# DOWNLOAD_PROXY env var, then standard *_PROXY env vars, then a DOWNLOAD_PROXY
+# entry in <root>/.env.
+DOWNLOAD_PROXY="${DOWNLOAD_PROXY:-${ALL_PROXY:-${all_proxy:-${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}}}}"
+if [[ -z "${DOWNLOAD_PROXY}" ]]; then
+  DOWNLOAD_PROXY="$(env_value 'DOWNLOAD_PROXY')"
+fi
+
+CURL_COMMON_ARGS=(
+  -fL
+  --retry 3
+  --connect-timeout 10
+)
+
+# Probe whether a direct (proxy-bypassing) connection to the public internet
+# works, by hitting Google's generate_204 endpoint. The result is memoized so
+# the probe runs at most once per invocation.
+GOOGLE_PROBE_URL="https://www.google.com/generate_204"
+DIRECT_REACHABLE=""  # empty = not probed yet; 0 = direct works; 1 = blocked
+direct_reachable() {
+  if [[ -z "${DIRECT_REACHABLE}" ]]; then
+    if curl -fsS --noproxy '*' --connect-timeout 5 --max-time 10 \
+        -o /dev/null "${GOOGLE_PROBE_URL}"; then
+      DIRECT_REACHABLE=0
+      echo "Direct connection to Google works; skipping proxy." >&2
+    else
+      DIRECT_REACHABLE=1
+    fi
+  fi
+  return "${DIRECT_REACHABLE}"
+}
+
+# Decide which "channels" curl should try, in order. With a proxy configured we
+# normally try it first and fall back to a direct connection, so a flaky proxy
+# never blocks the update. But if a direct connection to Google already works we
+# skip the proxy entirely. Without a proxy (or with MIHOMO_NO_PROXY=1) we go
+# direct only.
+curl_channels() {
+  if [[ -n "${DOWNLOAD_PROXY}" && "${MIHOMO_NO_PROXY:-0}" != "1" ]] \
+      && ! direct_reachable; then
+    printf '%s\n' proxy direct
+  else
+    printf '%s\n' direct
+  fi
+}
+
+# Run curl with the common args plus any extra args, attempting each channel in
+# turn. Returns success on the first channel that works.
+curl_fetch() {
+  local -a channels
+  mapfile -t channels < <(curl_channels)
+  local last_index=$(( ${#channels[@]} - 1 ))
+  local i rc=0
+  for i in "${!channels[@]}"; do
+    local -a channel_args=()
+    case "${channels[i]}" in
+      proxy) channel_args=(--proxy "${DOWNLOAD_PROXY}") ;;
+      direct) [[ -n "${DOWNLOAD_PROXY}" ]] && channel_args=(--noproxy '*') ;;
+    esac
+    if curl "${CURL_COMMON_ARGS[@]}" "${channel_args[@]}" "$@"; then
+      return 0
+    fi
+    rc=$?
+    if [[ "${i}" -lt "${last_index}" ]]; then
+      echo "  ${channels[i]} connection failed (curl exit ${rc}); retrying direct..." >&2
+    fi
+  done
+  return "${rc}"
+}
+
+curl_read() {
+  curl_fetch -sS ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "$@"
+}
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Error: missing command: $1" >&2
@@ -54,6 +136,14 @@ Options:
 
 Environment:
   MIHOMO_VARIANT  Same as --variant when the option is omitted.
+  DOWNLOAD_PROXY  Optional curl proxy URL, for example:
+                  http://192.168.2.7:7897 or socks5h://192.168.2.7:7897.
+                  May also be set as DOWNLOAD_PROXY in <root>/.env. When set,
+                  downloads try the proxy first and fall back to a direct
+                  connection — unless a direct connection to Google already
+                  works, in which case the proxy is skipped.
+  MIHOMO_NO_PROXY=1
+                  Force direct connections and ignore any configured proxy.
 EOF
 }
 
@@ -112,10 +202,14 @@ case "${ARCH}" in
   *) MIHOMO_ARCH="${ARCH}" ;;
 esac
 
+if [[ -n "${DOWNLOAD_PROXY}" ]]; then
+  echo "Using download proxy: ${DOWNLOAD_PROXY}"
+fi
+
 api_assets() {
   local repo="$1"
   local api_url="https://api.github.com/repos/${repo}/releases/latest"
-  curl -fsSL ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "${api_url}" \
+  curl_read "${api_url}" \
     | grep '"browser_download_url"' \
     | sed -E 's/^[[:space:]]*"browser_download_url": "([^"]+)",?$/\1/'
 }
@@ -130,7 +224,7 @@ download_to() {
   local url="$1"
   local out="$2"
   echo "Downloading: ${url}"
-  curl -fL --retry 3 --connect-timeout 10 -o "${out}" "${url}"
+  curl_fetch -o "${out}" "${url}"
 }
 
 extract_archive() {
