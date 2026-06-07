@@ -55,11 +55,32 @@ CURL_COMMON_ARGS=(
   --speed-limit 1024
 )
 
+# Probe whether a direct (proxy-bypassing) connection to the public internet
+# works, by hitting Google's generate_204 endpoint. The result is memoized so
+# the probe runs at most once per invocation.
+GOOGLE_PROBE_URL="https://www.google.com/generate_204"
+DIRECT_REACHABLE=""  # empty = not probed yet; 0 = direct works; 1 = blocked
+direct_reachable() {
+  if [[ -z "${DIRECT_REACHABLE}" ]]; then
+    if curl -fsS --noproxy '*' --connect-timeout 5 --max-time 10 \
+        -o /dev/null "${GOOGLE_PROBE_URL}"; then
+      DIRECT_REACHABLE=0
+      echo "Direct connection to Google works; skipping proxy." >&2
+    else
+      DIRECT_REACHABLE=1
+    fi
+  fi
+  return "${DIRECT_REACHABLE}"
+}
+
 # Decide which "channels" curl should try, in order. With a proxy configured we
-# try it first and fall back to a direct connection, so a flaky proxy never
-# blocks the update; without one (or with SING_BOX_NO_PROXY=1) we go direct only.
+# normally try it first and fall back to a direct connection, so a flaky proxy
+# never blocks the update. But if a direct connection to Google already works we
+# skip the proxy entirely. Without a proxy (or with SING_BOX_NO_PROXY=1) we go
+# direct only.
 curl_channels() {
-  if [[ -n "${DOWNLOAD_PROXY}" && "${SING_BOX_NO_PROXY:-0}" != "1" ]]; then
+  if [[ -n "${DOWNLOAD_PROXY}" && "${SING_BOX_NO_PROXY:-0}" != "1" ]] \
+      && ! direct_reachable; then
     printf '%s\n' proxy direct
   else
     printf '%s\n' direct
@@ -132,7 +153,8 @@ Environment:
                  Typically a proxy shared by another device on your LAN.
                  May also be set as DOWNLOAD_PROXY in the repo-root .env file.
                  When set, downloads try the proxy first and fall back to a
-                 direct connection.
+                 direct connection — unless a direct connection to Google
+                 already works, in which case the proxy is skipped.
   SING_BOX_NO_PROXY=1
                  Force direct connections and ignore any configured proxy.
   SING_BOX_FORCE_DOWNLOAD=1

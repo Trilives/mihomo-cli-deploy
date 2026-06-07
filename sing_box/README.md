@@ -151,6 +151,8 @@ sudo ./sing_box/Script/setup_sing_box_service.sh -n sing-box-main --remove
 ssh -N -L 9090:127.0.0.1:9090 user@server   # 在本地机器执行，再访问 http://127.0.0.1:9090/ui
 ```
 
+不想敲命令也可以用图形化的 SSH 端口转发工具：[Trilives/Port_transfer_ssh_ui](https://github.com/Trilives/Port_transfer_ssh_ui)。
+
 确有需要开放到局域网时，可在 `clash_nodes_to_singbox_config.json` 中设置 `"lan_panel": true`（或转换时加 `--lan-panel`），脚本会把面板改为监听 `0.0.0.0:9090` 并放行私有网络访问。开放后请务必设置 `secret`，避免同网段设备直接控制代理，并按需配置防火墙。
 
 ## 注意事项

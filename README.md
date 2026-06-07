@@ -122,6 +122,8 @@ http://127.0.0.1:9090/ui/
 ssh -N -L 9090:127.0.0.1:9090 user@server   # 在本地机器执行
 ```
 
+不想敲命令也可以用图形化的 SSH 端口转发工具：[Trilives/Port_transfer_ssh_ui](https://github.com/Trilives/Port_transfer_ssh_ui)。
+
 仅在确有需要时才将 `external-controller` 改为 `0.0.0.0:9090` 开放到局域网，并务必设置非空 `secret`、按需配置防火墙限制可访问范围。
 
 ### 4. 可选：启用 TUN
