@@ -13,7 +13,7 @@ import secrets
 from pathlib import Path
 
 
-DEFAULT_CONTROLLER = "0.0.0.0:9090"
+DEFAULT_CONTROLLER = "127.0.0.1:9090"
 DEFAULT_EXTERNAL_UI = "ui"
 DEFAULT_TUN_STACK = "gvisor"
 

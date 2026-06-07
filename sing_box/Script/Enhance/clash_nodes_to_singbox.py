@@ -17,6 +17,7 @@ RESERVED_TAGS = {
     "Proxy",
     "AI",
     "Streaming",
+    "Direct",
     "Auto",
     "SG-Auto",
     "SG-Fallback",
@@ -25,6 +26,7 @@ RESERVED_TAGS = {
     "BLOCK",
     "DNS",
 }
+DIRECT_GROUP_TAG = "Direct"
 DEFAULT_PREFER = "Singapore,SG,新加坡,狮城"
 DEFAULT_OUTBOUND_CHOICES = ("Proxy", "Auto", "AI", "SG-Auto", "SG-Fallback")
 SG_EXCLUDE_KEYWORDS = ("实验",)
@@ -79,6 +81,8 @@ STREAMING_DOMAIN_SUFFIXES = [
 ]
 
 LOCAL_BYPASS_DOMAINS = ["localhost"]
+# Domains the user wants to always route through a dedicated direct-connect group.
+DIRECT_DOMAIN_SUFFIXES: list[str] = []
 LOCAL_BYPASS_IP_CIDRS = ["127.0.0.0/8", "0.0.0.0/8", "::1/128"]
 # Do not exclude 172.16.0.0/12: it contains the TUN-derived DNS address 172.19.0.2.
 # Other private destinations still match the later ip_is_private DIRECT route rule.
@@ -105,19 +109,23 @@ BYPASS_PROCESS_NAMES = [
 class CustomConfig(NamedTuple):
     ai_domain_suffixes: list[str]
     streaming_domain_suffixes: list[str]
+    direct_domain_suffixes: list[str]
     local_bypass_domains: list[str]
     route_exclude_ip_cidrs: list[str]
     bypass_process_names: list[str]
     tun_exclude_uids: list[int]
+    lan_panel: bool
 
 
 DEFAULT_CUSTOM_CONFIG = CustomConfig(
     ai_domain_suffixes=AI_DOMAIN_SUFFIXES,
     streaming_domain_suffixes=STREAMING_DOMAIN_SUFFIXES,
+    direct_domain_suffixes=DIRECT_DOMAIN_SUFFIXES,
     local_bypass_domains=LOCAL_BYPASS_DOMAINS,
     route_exclude_ip_cidrs=ROUTE_EXCLUDE_IP_CIDRS,
     bypass_process_names=BYPASS_PROCESS_NAMES,
     tun_exclude_uids=[],
+    lan_panel=False,
 )
 
 
@@ -191,6 +199,8 @@ def load_custom_config(path: Path) -> CustomConfig:
             data.get("streaming_domain_suffixes"), "streaming_domain_suffixes"
         )
         or STREAMING_DOMAIN_SUFFIXES,
+        # Optional: empty by default, so it does not override anything unless the user opts in.
+        direct_domain_suffixes=normalize_string_list(data.get("direct_domain_suffixes"), "direct_domain_suffixes"),
         local_bypass_domains=normalize_string_list(data.get("local_bypass_domains"), "local_bypass_domains")
         or LOCAL_BYPASS_DOMAINS,
         route_exclude_ip_cidrs=normalize_string_list(data.get("route_exclude_ip_cidrs"), "route_exclude_ip_cidrs")
@@ -198,6 +208,7 @@ def load_custom_config(path: Path) -> CustomConfig:
         bypass_process_names=normalize_string_list(data.get("bypass_process_names"), "bypass_process_names")
         or BYPASS_PROCESS_NAMES,
         tun_exclude_uids=normalize_int_list(data.get("tun_exclude_uids"), "tun_exclude_uids"),
+        lan_panel=parse_bool(data.get("lan_panel", False)),
     )
 
 
@@ -658,10 +669,17 @@ def build_inbounds(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> list[
 def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, Any]:
     rules = [
         {"domain": custom_config.local_bypass_domains, "server": "local"},
-        {"domain_suffix": custom_config.ai_domain_suffixes, "server": "remote"},
-        {"domain_suffix": custom_config.streaming_domain_suffixes, "server": "remote"},
-        {"rule_set": GEOSITE_CN_RULE_SET_TAG, "server": "local"},
     ]
+    # Resolve user-pinned direct domains locally so they are not leaked to the proxied DoH.
+    if custom_config.direct_domain_suffixes:
+        rules.append({"domain_suffix": custom_config.direct_domain_suffixes, "server": "local"})
+    rules.extend(
+        [
+            {"domain_suffix": custom_config.ai_domain_suffixes, "server": "remote"},
+            {"domain_suffix": custom_config.streaming_domain_suffixes, "server": "remote"},
+            {"rule_set": GEOSITE_CN_RULE_SET_TAG, "server": "local"},
+        ]
+    )
     return {
         "servers": [
             {"type": "udp", "tag": "local", "server": "223.5.5.5", "server_port": 53},
@@ -683,15 +701,20 @@ def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, 
     }
 
 
-def build_experimental(output_path: Path) -> dict[str, Any]:
-    return {
-        "clash_api": {
-            "external_controller": "0.0.0.0:9090",
-            "external_ui": "ui",
-            "default_mode": "rule",
-            "access_control_allow_private_network": True,
-        }
+def clash_api_controller(lan_access: bool) -> str:
+    # Default to a loopback-only panel; only expose it on the LAN when asked.
+    return "0.0.0.0:9090" if lan_access else "127.0.0.1:9090"
+
+
+def build_experimental(output_path: Path, lan_access: bool = False) -> dict[str, Any]:
+    clash_api: dict[str, Any] = {
+        "external_controller": clash_api_controller(lan_access),
+        "external_ui": "ui",
+        "default_mode": "rule",
     }
+    if lan_access:
+        clash_api["access_control_allow_private_network"] = True
+    return {"clash_api": clash_api}
 
 
 def build_rule_sets() -> list[dict[str, Any]]:
@@ -728,6 +751,15 @@ def build_route(
             {"action": "sniff"},
             {"protocol": "dns", "action": "hijack-dns"},
             {"ip_is_private": True, "action": "route", "outbound": "DIRECT"},
+        ]
+    )
+    # User-pinned direct domains take priority over AI/Streaming/CN routing.
+    if custom_config.direct_domain_suffixes:
+        rules.append(
+            {"domain_suffix": custom_config.direct_domain_suffixes, "action": "route", "outbound": DIRECT_GROUP_TAG}
+        )
+    rules.extend(
+        [
             {"domain_suffix": custom_config.ai_domain_suffixes, "action": "route", "outbound": "AI"},
             {"domain_suffix": custom_config.streaming_domain_suffixes, "action": "route", "outbound": "Streaming"},
             {
@@ -747,7 +779,9 @@ def build_route(
 
 
 def build_outbounds(
-    converted_nodes: list[dict[str, Any]], prefer_keywords: list[str]
+    converted_nodes: list[dict[str, Any]],
+    prefer_keywords: list[str],
+    custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     node_tags = [node["tag"] for node in converted_nodes]
     selectable_tags = [tag for tag in node_tags if not is_informational_node(tag)]
@@ -813,6 +847,20 @@ def build_outbounds(
             },
         ]
     )
+
+    # Special direct-connect group: only created when the user pins direct domains in the
+    # custom config. Defaults to DIRECT but stays switchable to a proxy from the panel.
+    has_direct_group = bool(custom_config.direct_domain_suffixes)
+    if has_direct_group:
+        outbounds.append(
+            {
+                "type": "selector",
+                "tag": DIRECT_GROUP_TAG,
+                "outbounds": ["DIRECT", "Proxy", "Auto"],
+                "default": "DIRECT",
+            }
+        )
+
     return outbounds, {
         "has_sg_auto": has_sg_auto,
         "has_sg_fallback": has_sg_auto,
@@ -821,6 +869,8 @@ def build_outbounds(
         "proxy_default": proxy_default,
         "ai_default": ai_default,
         "streaming_default": streaming_default,
+        "has_direct_group": has_direct_group,
+        "direct_count": len(custom_config.direct_domain_suffixes),
     }
 
 
@@ -830,8 +880,9 @@ def build_singbox_config(
     default_outbound: str,
     output_path: Path,
     custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
+    lan_access: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    outbounds, outbound_info = build_outbounds(converted_nodes, prefer_keywords)
+    outbounds, outbound_info = build_outbounds(converted_nodes, prefer_keywords, custom_config)
     if default_outbound in {"SG-Auto", "SG-Fallback"} and not outbound_info["has_sg_auto"]:
         print(f"warning: --default-outbound {default_outbound} requested but no Singapore group was generated; using Proxy")
         default_outbound = "Proxy"
@@ -845,7 +896,7 @@ def build_singbox_config(
             outbound_info["has_sg_auto"],
             custom_config,
         ),
-        "experimental": build_experimental(output_path),
+        "experimental": build_experimental(output_path, lan_access),
     }
     return config, outbound_info
 
@@ -906,6 +957,7 @@ def print_summary(
     converted_nodes: list[dict[str, Any]],
     skipped_reasons: Counter[str],
     outbound_info: dict[str, Any],
+    lan_access: bool = False,
 ) -> None:
     print()
     print("Summary:")
@@ -927,9 +979,17 @@ def print_summary(
     print(f"  Proxy default outbound: {outbound_info['proxy_default']}")
     print(f"  AI default outbound: {outbound_info['ai_default']}")
     print(f"  Streaming default outbound: {outbound_info['streaming_default']}")
-    print("  Clash API controller: 0.0.0.0:9090")
+    print(f"  Direct group generated: {outbound_info['has_direct_group']}")
+    if outbound_info["has_direct_group"]:
+        print(f"  Direct group domain count: {outbound_info['direct_count']}")
+    controller = clash_api_controller(lan_access)
+    print(f"  Clash API controller: {controller}")
+    print(f"  LAN panel access: {'enabled' if lan_access else 'disabled (loopback only)'}")
     print("  Web UI path: ui (relative to the configuration directory)")
-    print("  Web UI URL: http://<LAN-IP>:9090/ui")
+    if lan_access:
+        print("  Web UI URL: http://<LAN-IP>:9090/ui")
+    else:
+        print("  Web UI URL: http://127.0.0.1:9090/ui")
     obfs_count = sum(1 for node in converted_nodes if node.get("plugin") == "obfs-local")
     print(f"  obfs-local required: {obfs_count > 0}")
     if obfs_count:
@@ -960,6 +1020,14 @@ def main() -> int:
         default=str(DEFAULT_CUSTOM_CONFIG_PATH),
         help="JSON file for custom DNS, route, process, and easytier bypass settings",
     )
+    parser.add_argument(
+        "--lan-panel",
+        action="store_true",
+        help=(
+            "expose the Clash API/Web UI on the LAN (0.0.0.0:9090); default is loopback only "
+            "(127.0.0.1:9090). Overrides the custom config 'lan_panel' field when set."
+        ),
+    )
     parser.add_argument("--strict", action="store_true", help="exit on unsupported or incomplete nodes")
     parser.add_argument(
         "--skip-unsupported",
@@ -975,6 +1043,8 @@ def main() -> int:
         output_path = validate_output_path(Path(args.output))
         custom_config_path = Path(args.custom_config)
         custom_config = load_custom_config(custom_config_path)
+        # The CLI flag force-enables LAN access; otherwise fall back to the config field.
+        lan_access = args.lan_panel or custom_config.lan_panel
         data = load_yaml(input_path)
         proxies = data.get("proxies")
         if proxies is None:
@@ -1010,11 +1080,20 @@ def main() -> int:
             args.default_outbound,
             output_path,
             custom_config,
+            lan_access,
         )
         validate_config_basic(config)
         write_json_config(config, output_path)
 
-        print_summary(input_path, output_path, len(proxies), converted_nodes, skipped_reasons, outbound_info)
+        print_summary(
+            input_path,
+            output_path,
+            len(proxies),
+            converted_nodes,
+            skipped_reasons,
+            outbound_info,
+            lan_access,
+        )
         return 0
     except ConversionError as exc:
         print(f"error: {exc}", file=sys.stderr)

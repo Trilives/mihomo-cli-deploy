@@ -131,29 +131,27 @@ sudo ./sing_box/Script/setup_sing_box_service.sh -n sing-box-main --remove
 
 ## Web UI
 
-后端转换得到的配置不一定包含 Web UI 设置。需要局域网访问 UI 时，确认 `sing_box/config.json` 中包含 `experimental.clash_api`。本地兜底转换脚本会自动写入该配置。
-
-局域网访问通常需要：
+本地兜底转换脚本会自动写入 `experimental.clash_api`。**默认推荐仅本地访问**：面板监听回环地址 `127.0.0.1:9090`，不开放到局域网。
 
 ```json
 {
   "experimental": {
     "clash_api": {
-      "external_controller": "0.0.0.0:9090",
+      "external_controller": "127.0.0.1:9090",
       "external_ui": "ui",
-      "default_mode": "Rule"
+      "default_mode": "rule"
     }
   }
 }
 ```
 
-启动后访问：
+启动后在本机访问 `http://127.0.0.1:9090/ui`。需要在另一台机器上查看时，建议用 SSH 端口转发，而不是开放到局域网：
 
-```text
-http://<LAN-IP>:9090/ui
+```bash
+ssh -N -L 9090:127.0.0.1:9090 user@server   # 在本地机器执行，再访问 http://127.0.0.1:9090/ui
 ```
 
-如果开放到局域网，建议在配置里设置 `secret`，避免同网段设备直接控制代理。
+确有需要开放到局域网时，可在 `clash_nodes_to_singbox_config.json` 中设置 `"lan_panel": true`（或转换时加 `--lan-panel`），脚本会把面板改为监听 `0.0.0.0:9090` 并放行私有网络访问。开放后请务必设置 `secret`，避免同网段设备直接控制代理，并按需配置防火墙。
 
 ## 注意事项
 
