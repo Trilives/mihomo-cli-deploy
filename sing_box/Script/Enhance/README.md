@@ -38,10 +38,12 @@
 
 - `ai_domain_suffixes`：走 `AI` 出站的域名后缀。
 - `streaming_domain_suffixes`：走 `Streaming` 出站的流媒体域名后缀。
+- `direct_domain_suffixes`：指定直连的域名后缀。填写后会新增一个 `Direct` 特殊直连组，并把这些域名优先路由到该组（默认 `DIRECT`，可在面板切换到 `Proxy`/`Auto`），同时让它们走本地 DNS 解析。留空（默认）则不生成该组。
 - `local_bypass_domains`：本地直连域名。
 - `route_exclude_ip_cidrs`：TUN 自动路由排除网段，同时会生成直连路由规则。
 - `bypass_process_names`：直连进程名，例如 `tailscaled`。
 - `tun_exclude_uids`：写入 TUN 入站的 `exclude_uid`，用于让指定系统用户的流量绕过 sing-box 自动路由。
+- `lan_panel`：是否允许局域网访问 Clash API/Web UI。`true` 时监听 `0.0.0.0:9090` 并放行私有网络访问；`false`（默认）仅监听 `127.0.0.1:9090`。命令行 `--lan-panel` 仍可强制开启（覆盖此字段）。
 
 ## CN 规则集
 
@@ -98,6 +100,8 @@ sudo ./sing_box/Script/setup_weekly_update_timer.sh --remove   # 卸载定时任
 `Auto` 和 `Proxy` 会过滤订阅说明节点，例如 `Traffic:`、`Expire:`、`剩余流量`、`过期时间`。顶层 `outbounds` 会先保留真实节点和常用策略组，再把 `SG-Auto`、`SG-Fallback`、`Auto` 等自动/地区分组放在后面，`Fallback` 放在最后；`Proxy` 内部仍保持分组优先。
 
 `Streaming` 是和 `AI` 类似的流媒体选择器，匹配 `streaming_domain_suffixes` 后走该组，默认选择 `Proxy`。
+
+`Direct` 是可选的特殊直连组，仅当 `direct_domain_suffixes` 非空时生成。命中这些域名后优先走 `Direct`（默认 `DIRECT`，可在面板切换到 `Proxy`/`Auto`），优先级高于 `AI`/`Streaming`/CN 分流，适合强制某些域名走本地直连。
 
 ## EasyTier 绕过
 

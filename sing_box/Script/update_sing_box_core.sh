@@ -29,6 +29,71 @@ if [[ -n "${GITHUB_TOKEN}" ]]; then
   GH_AUTH_HEADER=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
 
+env_value() {
+  local key_regex="$1"
+  [[ -f "${ENV_FILE}" ]] || return 0
+  sed -nE "s/^[[:space:]]*(${key_regex})[[:space:]]*=[[:space:]]*\"?([^\"[:space:]]+)\"?.*$/\\2/p" "${ENV_FILE}" | head -n1
+}
+
+# Download proxy (optional): point this at a proxy reachable on your LAN so the
+# update can fetch GitHub through a device that already has good connectivity,
+# for example http://192.168.2.7:7897 or socks5h://192.168.2.7:7897. Priority:
+# DOWNLOAD_PROXY env var, then standard *_PROXY env vars, then a DOWNLOAD_PROXY
+# entry in the repo-root .env.
+DOWNLOAD_PROXY="${DOWNLOAD_PROXY:-${ALL_PROXY:-${all_proxy:-${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}}}}"
+if [[ -z "${DOWNLOAD_PROXY}" ]]; then
+  DOWNLOAD_PROXY="$(env_value 'DOWNLOAD_PROXY')"
+fi
+
+CURL_COMMON_ARGS=(
+  -fL
+  --retry 5
+  --retry-delay 2
+  --retry-all-errors
+  --connect-timeout 10
+  --speed-time 30
+  --speed-limit 1024
+)
+
+# Decide which "channels" curl should try, in order. With a proxy configured we
+# try it first and fall back to a direct connection, so a flaky proxy never
+# blocks the update; without one (or with SING_BOX_NO_PROXY=1) we go direct only.
+curl_channels() {
+  if [[ -n "${DOWNLOAD_PROXY}" && "${SING_BOX_NO_PROXY:-0}" != "1" ]]; then
+    printf '%s\n' proxy direct
+  else
+    printf '%s\n' direct
+  fi
+}
+
+# Run curl with the common args plus any extra args, attempting each channel in
+# turn. Returns success on the first channel that works.
+curl_fetch() {
+  local -a channels
+  mapfile -t channels < <(curl_channels)
+  local last_index=$(( ${#channels[@]} - 1 ))
+  local i rc=0
+  for i in "${!channels[@]}"; do
+    local -a channel_args=()
+    case "${channels[i]}" in
+      proxy) channel_args=(--proxy "${DOWNLOAD_PROXY}") ;;
+      direct) [[ -n "${DOWNLOAD_PROXY}" ]] && channel_args=(--noproxy '*') ;;
+    esac
+    if curl "${CURL_COMMON_ARGS[@]}" "${channel_args[@]}" "$@"; then
+      return 0
+    fi
+    rc=$?
+    if [[ "${i}" -lt "${last_index}" ]]; then
+      echo "  ${channels[i]} connection failed (curl exit ${rc}); retrying direct..." >&2
+    fi
+  done
+  return "${rc}"
+}
+
+curl_read() {
+  curl_fetch -sS ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "$@"
+}
+
 need_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Error: missing command: $1" >&2
@@ -62,6 +127,16 @@ Options:
 
 Environment:
   SING_BOX_LIBC  Same as --libc when the option is omitted.
+  DOWNLOAD_PROXY Optional curl proxy URL, for example:
+                 http://192.168.2.7:7897 or socks5h://192.168.2.7:7897.
+                 Typically a proxy shared by another device on your LAN.
+                 May also be set as DOWNLOAD_PROXY in the repo-root .env file.
+                 When set, downloads try the proxy first and fall back to a
+                 direct connection.
+  SING_BOX_NO_PROXY=1
+                 Force direct connections and ignore any configured proxy.
+  SING_BOX_FORCE_DOWNLOAD=1
+                 Ignore cached files in sing_box/source/downloads.
 EOF
 }
 
@@ -95,6 +170,9 @@ case "${LIBC_VARIANT}" in
     ;;
 esac
 
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
+
 need_cmd curl
 need_cmd grep
 need_cmd sed
@@ -122,18 +200,31 @@ case "${ARCH}" in
   *) SING_BOX_ARCH="${ARCH}" ;;
 esac
 
+if [[ -n "${DOWNLOAD_PROXY}" ]]; then
+  echo "Using download proxy: ${DOWNLOAD_PROXY}"
+fi
+
+release_json() {
+  local repo="$1"
+  local safe_repo="${repo//\//_}"
+  local cache_file="${TMP_DIR}/${safe_repo}.latest.json"
+  if [[ ! -s "${cache_file}" ]]; then
+    local api_url="https://api.github.com/repos/${repo}/releases/latest"
+    curl_read "${api_url}" > "${cache_file}"
+  fi
+  cat "${cache_file}"
+}
+
 api_assets() {
   local repo="$1"
-  local api_url="https://api.github.com/repos/${repo}/releases/latest"
-  curl -fsSL ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "${api_url}" \
+  release_json "${repo}" \
     | grep '"browser_download_url"' \
     | sed -E 's/^[[:space:]]*"browser_download_url": "([^"]+)",?$/\1/'
 }
 
 latest_tag() {
   local repo="$1"
-  local api_url="https://api.github.com/repos/${repo}/releases/latest"
-  curl -fsSL ${GH_AUTH_HEADER[@]+"${GH_AUTH_HEADER[@]}"} "${api_url}" \
+  release_json "${repo}" \
     | grep '"tag_name"' \
     | sed -E 's/^[[:space:]]*"tag_name": "([^"]+)",?$/\1/' \
     | head -n 1
@@ -145,11 +236,49 @@ pick_asset() {
   api_assets "${repo}" | grep -Ei "${regex}" | head -n 1 || true
 }
 
+cache_valid() {
+  local file="$1"
+  local name="${2:-$1}"
+
+  [[ -s "${file}" ]] || return 1
+  case "${name}" in
+    *.tar.gz|*.tgz)
+      tar -tzf "${file}" >/dev/null 2>&1
+      ;;
+    *.zip)
+      command -v unzip >/dev/null 2>&1 && unzip -tq "${file}" >/dev/null 2>&1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 download_to() {
   local url="$1"
   local out="$2"
+  local part="${out}.part"
+  local resume_args=()
+
+  if [[ "${SING_BOX_FORCE_DOWNLOAD:-0}" != "1" ]] && cache_valid "${out}" "${out}"; then
+    echo "Using cached: ${out}"
+    return 0
+  fi
+  if [[ -e "${out}" ]]; then
+    echo "Discarding invalid cache: ${out}"
+    rm -f "${out}" "${part}"
+  fi
+  if [[ -s "${part}" ]]; then
+    resume_args=(-C -)
+  fi
+
   echo "Downloading: ${url}"
-  curl -fL --retry 3 --connect-timeout 10 -o "${out}" "${url}"
+  curl_fetch "${resume_args[@]}" -o "${part}" "${url}"
+  if ! cache_valid "${part}" "${out}"; then
+    echo "Error: downloaded file failed integrity check: ${out}" >&2
+    exit 1
+  fi
+  mv -f "${part}" "${out}"
 }
 
 extract_archive() {
@@ -175,9 +304,6 @@ extract_archive() {
       ;;
   esac
 }
-
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_DIR}"' EXIT
 
 echo "Step 1/5: Find latest Linux sing-box asset"
 SING_BOX_VERSION="$(latest_tag "${SING_BOX_REPO}")"

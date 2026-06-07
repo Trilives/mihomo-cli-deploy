@@ -41,6 +41,9 @@
     "spotify.com",
     "scdn.co"
   ],
+  "direct_domain_suffixes": [
+    "dashscope.aliyuncs.com"
+  ],
   "local_bypass_domains": [
     "localhost"
   ],
@@ -62,5 +65,6 @@
     "tailscale",
     "tailscaled"
   ],
-  "tun_exclude_uids": [997]
+  "tun_exclude_uids": [997],
+  "lan_panel": false
 }
