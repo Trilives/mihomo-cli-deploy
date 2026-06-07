@@ -107,6 +107,23 @@ fi
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 RUNTIME_CONFIG_PATH="${RUNTIME_DIR}/${SERVICE_NAME}.yaml"
 
+ENV_FILE="${BASE_DIR}/.env"
+env_value() {
+  local key_regex="$1"
+  [[ -f "${ENV_FILE}" ]] || return 0
+  sed -nE "s/^[[:space:]]*(${key_regex})[[:space:]]*=[[:space:]]*\"?([^\"[:space:]]+)\"?.*$/\\2/p" "${ENV_FILE}" | head -n1
+}
+
+# Whether to expose the proxy ports to the LAN (allow-lan). The dashboard itself
+# always stays bound to its local controller address; this only controls whether
+# other devices on the LAN can use this machine as a proxy. Priority: ALLOW_LAN
+# env var, then an ALLOW_LAN entry in <root>/.env. Default: false (local only).
+ALLOW_LAN_RAW="${ALLOW_LAN:-$(env_value 'ALLOW_LAN')}"
+case "${ALLOW_LAN_RAW,,}" in
+  1|true|yes|on) ALLOW_LAN="true" ;;
+  *) ALLOW_LAN="false" ;;
+esac
+
 remove_service_by_name() {
   local service_name="$1"
   local service_file="/etc/systemd/system/${service_name}.service"
@@ -173,8 +190,11 @@ if ! id "${RUN_USER}" >/dev/null 2>&1; then
   exit 1
 fi
 
-# Enable LAN dashboard settings (allow-lan / external-controller / external-ui /
-# secret) on the source config so the secret persists across redeploys.
+# Ensure the dashboard works (external-controller / external-ui / secret) and set
+# allow-lan to the configured value (ALLOW_LAN, default false). The controller is
+# preserved if already set and only stays/becomes a local address by default;
+# allow-lan only controls whether the proxy is reachable from the LAN. Editing the
+# source config keeps the generated secret across redeploys.
 ensure_dashboard_settings() {
   local config_path="$1"
   local dashboard_helper="${SCRIPT_DIR}/Enhance/enable_tun_lan_dashboard.py"
@@ -184,14 +204,14 @@ ensure_dashboard_settings() {
     exit 1
   fi
 
-  if grep -Eq '^allow-lan:[[:space:]]*true([[:space:]]*#.*)?$' "${config_path}" \
+  if grep -Eq "^allow-lan:[[:space:]]*${ALLOW_LAN}([[:space:]]*#.*)?\$" "${config_path}" \
     && grep -Eq '^external-controller:[[:space:]]*' "${config_path}" \
     && grep -Eq '^external-ui:[[:space:]]*' "${config_path}"; then
     return 0
   fi
 
-  echo "检测到 dashboard 配置不完整或未开启局域网访问，自动补全面板设置"
-  python3 "${dashboard_helper}" "${config_path}" --dashboard-only --generate-secret
+  echo "检测到 dashboard 配置不完整或 allow-lan 与期望值(${ALLOW_LAN})不一致，自动补全面板设置"
+  python3 "${dashboard_helper}" "${config_path}" --dashboard-only --generate-secret --allow-lan "${ALLOW_LAN}"
 }
 
 ensure_dashboard_settings "${CONFIG_PATH}"

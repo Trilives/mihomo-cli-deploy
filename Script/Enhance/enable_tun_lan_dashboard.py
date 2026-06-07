@@ -34,8 +34,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--controller",
-        default=DEFAULT_CONTROLLER,
-        help="external-controller listen address.",
+        default=None,
+        help="external-controller listen address. Existing value is preserved when omitted; defaults to 127.0.0.1:9090 when absent.",
+    )
+    parser.add_argument(
+        "--allow-lan",
+        choices=("true", "false"),
+        default="true",
+        help="allow-lan value to write. Defaults to true.",
     )
     parser.add_argument(
         "--external-ui",
@@ -106,8 +112,8 @@ def replace_or_insert_block(lines: list[str], key: str, block: list[str], insert
     return lines[:insert_at] + block + lines[insert_at:]
 
 
-def existing_secret(lines: list[str]) -> str | None:
-    bounds = find_block(lines, "secret")
+def existing_value(lines: list[str], key: str) -> str | None:
+    bounds = find_block(lines, key)
     if bounds is None:
         return None
 
@@ -134,18 +140,25 @@ def build_tun_block(stack: str) -> list[str]:
 
 def update_config(
     config_path: Path,
-    controller: str,
+    controller: str | None,
     external_ui: str,
     secret: str | None,
     tun_stack: str,
     skip_tun: bool = False,
     generate_secret: bool = False,
+    allow_lan: str = "true",
 ) -> None:
     original_text = config_path.read_text(encoding="utf-8")
     trailing_newline = original_text.endswith("\n")
     lines = original_text.splitlines()
 
-    existing_dashboard_secret = existing_secret(lines)
+    # Preserve a controller the user already set (e.g. 0.0.0.0:9090); only fall
+    # back to the local default when none exists. This keeps a flip of allow-lan
+    # from silently rebinding the dashboard.
+    if controller is None:
+        controller = existing_value(lines, "external-controller") or DEFAULT_CONTROLLER
+
+    existing_dashboard_secret = existing_value(lines, "secret")
     dashboard_secret = secret if secret is not None else existing_dashboard_secret
     secret_generated = False
     if dashboard_secret is None and generate_secret:
@@ -153,7 +166,7 @@ def update_config(
         secret_generated = True
 
     for key, value in [
-        ("allow-lan", "true"),
+        ("allow-lan", allow_lan),
         ("external-controller", controller),
         ("external-ui", external_ui),
     ]:
@@ -175,6 +188,7 @@ def update_config(
     config_path.write_text(updated_text, encoding="utf-8")
 
     print(f"Updated {config_path}")
+    print(f"allow-lan: {allow_lan}")
     print(f"external-controller: {controller}")
     print(f"external-ui: {external_ui}")
     if dashboard_secret is None:
@@ -197,6 +211,7 @@ def main() -> None:
         args.tun_stack,
         skip_tun=args.dashboard_only,
         generate_secret=args.generate_secret,
+        allow_lan=args.allow_lan,
     )
 
 
