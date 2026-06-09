@@ -44,6 +44,8 @@
 - `bypass_process_names`：直连进程名，例如 `tailscaled`。
 - `tun_exclude_uids`：写入 TUN 入站的 `exclude_uid`，用于让指定系统用户的流量绕过 sing-box 自动路由。
 - `lan_panel`：是否允许局域网访问 Clash API/Web UI。`true` 时监听 `0.0.0.0:9090` 并放行私有网络访问；`false`（默认）仅监听 `127.0.0.1:9090`。命令行 `--lan-panel` 仍可强制开启（覆盖此字段）。
+- `bootstrap_dns_server`：引导 DNS（`local` 服务器）的地址，用于解析节点 `server` 域名和直连域名。默认 `223.5.5.5`（UDP）。填 `"dhcp"` 则改用 DHCP 跟随系统/路由器下发的 DNS（适合常换网络的机器，但无 DHCP 租约的环境会失效）。留空使用默认值。
+- `bootstrap_dns_port`：引导 DNS 端口，默认 `53`。仅在 `bootstrap_dns_server` 为具体地址时生效。
 
 ## CN 规则集
 
@@ -112,6 +114,49 @@ EasyTier 的 P2P peer IP 是动态发现的，不应靠 `easytier_bypass_domains
 - 在 `clash_nodes_to_singbox_config.json` 中设置 `tun_exclude_uids`，让 sing-box TUN 也显式排除 EasyTier UID。
 
 这样可以保留 sing-box `strict_route`，同时让 EasyTier 动态 P2P 数据面稳定走物理网卡。
+
+## DNS bootstrap 与节点域名解析
+
+2026-06-09 排查过一次故障：`sing-box` 进程没有崩，自动更新也成功，但国内外访问都异常。日志里大量出现类似：
+
+```text
+lookup fd025gz8-c617.apt-hcloud.org: context deadline exceeded
+```
+
+原因是代理节点的 `server` 使用域名，而普通 DNS 的 `remote` 路径又通过 `AI`/`Proxy` 出站访问。当代理出站还没解析出节点域名时，DNS 请求反过来依赖这个代理出站，形成 bootstrap 闭环。重启后短时间恢复，是因为缓存、连接状态或测速状态被刷新，但根因仍然存在。
+
+按照 sing-box 当前官方文档（1.12+ 的 `domain_resolver` 迁移），生成器在 `route.default_domain_resolver` 统一指定一个独立 bootstrap resolver，让所有出站的 `server` 域名（以及 `DIRECT` 的直连请求域名）都先用它解析：
+
+```json
+"default_domain_resolver": {
+  "server": "local",
+  "strategy": "prefer_ipv4"
+}
+```
+
+> 该全局默认已覆盖全部出站，因此不再给每个代理节点和 `DIRECT` 单独写 `domain_resolver`，避免冗余。如需对个别出站使用不同解析器，才需要在该出站上单独设置 `domain_resolver` 覆盖。
+
+`local` DNS server 默认生成成公共 DNS（UDP）：
+
+```json
+{
+  "type": "udp",
+  "tag": "local",
+  "server": "223.5.5.5",
+  "server_port": 53
+}
+```
+
+默认用公共 DNS 是为了在任何环境（含无 DHCP 租约的 VPS/云主机）开箱即用。如果这台机器经常换网络、希望跟随路由器/系统下发的 DNS，在 `clash_nodes_to_singbox_config.json` 里设 `"bootstrap_dns_server": "dhcp"` 即生成 `{"type": "dhcp", "tag": "local"}`；需要其他固定 DNS 时则把 `bootstrap_dns_server`/`bootstrap_dns_port` 设成具体地址端口。不要把它写死成某个网关地址（如 `192.168.2.1`），否则换网后可能失效。
+
+bootstrap resolver 使用 `prefer_ipv4`：优先 IPv4，避免没有稳定 IPv6 出口时直连域名解析到 AAAA 后报 `network is unreachable`；同时保留 IPv6 回退，IPv6-only 的节点/服务器仍可连通（早期版本用的 `ipv4_only` 会让这类目标连不上）。
+
+官方参考：
+
+- `domain_resolver`：<https://sing-box.sagernet.org/configuration/shared/dial/>
+- `route.default_domain_resolver`：<https://sing-box.sagernet.org/configuration/route/>
+- DNS `dhcp` server：<https://sing-box.sagernet.org/configuration/dns/server/dhcp/>
+- 迁移示例：<https://sing-box.sagernet.org/migration/>
 
 ## 校验
 
