@@ -36,6 +36,17 @@ DEFAULT_CUSTOM_CONFIG_PATH = Path(__file__).with_name("clash_nodes_to_singbox_co
 RULESET_DIR_NAME = "sing_box/ruleset"
 GEOSITE_CN_RULE_SET_TAG = "geosite-cn"
 GEOIP_CN_RULE_SET_TAG = "geoip-cn"
+BOOTSTRAP_DNS_TAG = "local"
+# Sentinel value for bootstrap_dns_server to use the system/router DNS via DHCP.
+BOOTSTRAP_DNS_DHCP = "dhcp"
+DEFAULT_BOOTSTRAP_DNS_SERVER = "223.5.5.5"
+DEFAULT_BOOTSTRAP_DNS_PORT = 53
+# prefer_ipv4 keeps IPv4 preference for proxy/direct hostname resolution while
+# still allowing IPv6-only servers to connect (unlike ipv4_only).
+BOOTSTRAP_DOMAIN_RESOLVER = {
+    "server": BOOTSTRAP_DNS_TAG,
+    "strategy": "prefer_ipv4",
+}
 
 AI_DOMAIN_SUFFIXES = [
     "openai.com",
@@ -115,6 +126,8 @@ class CustomConfig(NamedTuple):
     bypass_process_names: list[str]
     tun_exclude_uids: list[int]
     lan_panel: bool
+    bootstrap_dns_server: str | None
+    bootstrap_dns_port: int
 
 
 DEFAULT_CUSTOM_CONFIG = CustomConfig(
@@ -126,6 +139,8 @@ DEFAULT_CUSTOM_CONFIG = CustomConfig(
     bypass_process_names=BYPASS_PROCESS_NAMES,
     tun_exclude_uids=[],
     lan_panel=False,
+    bootstrap_dns_server=DEFAULT_BOOTSTRAP_DNS_SERVER,
+    bootstrap_dns_port=DEFAULT_BOOTSTRAP_DNS_PORT,
 )
 
 
@@ -178,6 +193,24 @@ def normalize_int_list(value: Any, field: str) -> list[int]:
     return result
 
 
+def normalize_dns_server(value: Any, field: str, default: str | None) -> str | None:
+    if value is None:
+        return default
+    text = str(value).strip()
+    if not text:
+        raise ConversionError(f"custom config {field} must not be empty")
+    return text
+
+
+def normalize_port_value(value: Any, field: str, default: int) -> int:
+    if value is None:
+        return default
+    port = normalize_port(value)
+    if port is None:
+        raise ConversionError(f"custom config {field} must be a valid TCP/UDP port")
+    return port
+
+
 def load_custom_config(path: Path) -> CustomConfig:
     if not path.exists():
         return DEFAULT_CUSTOM_CONFIG
@@ -209,6 +242,12 @@ def load_custom_config(path: Path) -> CustomConfig:
         or BYPASS_PROCESS_NAMES,
         tun_exclude_uids=normalize_int_list(data.get("tun_exclude_uids"), "tun_exclude_uids"),
         lan_panel=parse_bool(data.get("lan_panel", False)),
+        bootstrap_dns_server=normalize_dns_server(
+            data.get("bootstrap_dns_server"), "bootstrap_dns_server", DEFAULT_BOOTSTRAP_DNS_SERVER
+        ),
+        bootstrap_dns_port=normalize_port_value(
+            data.get("bootstrap_dns_port"), "bootstrap_dns_port", DEFAULT_BOOTSTRAP_DNS_PORT
+        ),
     )
 
 
@@ -680,9 +719,24 @@ def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, 
             {"rule_set": GEOSITE_CN_RULE_SET_TAG, "server": "local"},
         ]
     )
+    if (custom_config.bootstrap_dns_server or "").lower() == BOOTSTRAP_DNS_DHCP:
+        # Opt-in: discover the system/router DNS via DHCP (best for LAN/CN domains,
+        # but fails on environments without a DHCP lease, e.g. some VPS/cloud hosts).
+        bootstrap_server = {
+            "type": "dhcp",
+            "tag": BOOTSTRAP_DNS_TAG,
+        }
+    else:
+        bootstrap_server = {
+            "type": "udp",
+            "tag": BOOTSTRAP_DNS_TAG,
+            "server": custom_config.bootstrap_dns_server,
+            "server_port": custom_config.bootstrap_dns_port,
+        }
+
     return {
         "servers": [
-            {"type": "udp", "tag": "local", "server": "223.5.5.5", "server_port": 53},
+            bootstrap_server,
             {
                 "type": "https",
                 "tag": "remote",
@@ -695,7 +749,7 @@ def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, 
         ],
         "rules": rules,
         # Keep local/CN lookups direct; route all other domain lookups through proxied DoH.
-        # Proxy-node bootstrap uses route.default_domain_resolver instead of this fallback.
+        # Proxy/direct hostname bootstrap uses route.default_domain_resolver, not this fallback.
         "final": "remote",
         "strategy": "prefer_ipv4",
     }
@@ -771,7 +825,10 @@ def build_route(
     )
     return {
         "auto_detect_interface": True,
-        "default_domain_resolver": "local",
+        # Resolve every outbound's server hostname (and direct-request domains) through the
+        # direct bootstrap resolver. This follows sing-box's domain_resolver migration guidance
+        # and avoids a DNS loop where reaching a proxy would require the proxy's hostname first.
+        "default_domain_resolver": dict(BOOTSTRAP_DOMAIN_RESOLVER),
         "rules": rules,
         "rule_set": build_rule_sets(),
         "final": default_outbound,
