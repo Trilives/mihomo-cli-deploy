@@ -36,7 +36,8 @@ DEFAULT_CUSTOM_CONFIG_PATH = Path(__file__).with_name("clash_nodes_to_singbox_co
 RULESET_DIR_NAME = "sing_box/ruleset"
 GEOSITE_CN_RULE_SET_TAG = "geosite-cn"
 GEOIP_CN_RULE_SET_TAG = "geoip-cn"
-BOOTSTRAP_DNS_TAG = "local"
+BOOTSTRAP_DNS_TAG = "dns-direct"
+REMOTE_DNS_TAG = "dns-proxy"
 # Sentinel value for bootstrap_dns_server to use the system/router DNS via DHCP.
 BOOTSTRAP_DNS_DHCP = "dhcp"
 DEFAULT_BOOTSTRAP_DNS_SERVER = "223.5.5.5"
@@ -707,16 +708,19 @@ def build_inbounds(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> list[
 
 def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, Any]:
     rules = [
-        {"domain": custom_config.local_bypass_domains, "server": "local"},
+        {"domain": custom_config.local_bypass_domains, "action": "route", "server": BOOTSTRAP_DNS_TAG},
     ]
     # Resolve user-pinned direct domains locally so they are not leaked to the proxied DoH.
     if custom_config.direct_domain_suffixes:
-        rules.append({"domain_suffix": custom_config.direct_domain_suffixes, "server": "local"})
+        rules.append(
+            {"domain_suffix": custom_config.direct_domain_suffixes, "action": "route", "server": BOOTSTRAP_DNS_TAG}
+        )
     rules.extend(
         [
-            {"domain_suffix": custom_config.ai_domain_suffixes, "server": "remote"},
-            {"domain_suffix": custom_config.streaming_domain_suffixes, "server": "remote"},
-            {"rule_set": GEOSITE_CN_RULE_SET_TAG, "server": "local"},
+            {"domain_suffix": custom_config.ai_domain_suffixes, "action": "route", "server": REMOTE_DNS_TAG},
+            {"domain_suffix": custom_config.streaming_domain_suffixes, "action": "route", "server": REMOTE_DNS_TAG},
+            {"rule_set": GEOSITE_CN_RULE_SET_TAG, "action": "route", "server": BOOTSTRAP_DNS_TAG},
+            {"rule_set": GEOIP_CN_RULE_SET_TAG, "action": "route", "server": BOOTSTRAP_DNS_TAG},
         ]
     )
     if (custom_config.bootstrap_dns_server or "").lower() == BOOTSTRAP_DNS_DHCP:
@@ -725,6 +729,7 @@ def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, 
         bootstrap_server = {
             "type": "dhcp",
             "tag": BOOTSTRAP_DNS_TAG,
+            "detour": "DIRECT",
         }
     else:
         bootstrap_server = {
@@ -732,26 +737,35 @@ def build_dns(custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG) -> dict[str, 
             "tag": BOOTSTRAP_DNS_TAG,
             "server": custom_config.bootstrap_dns_server,
             "server_port": custom_config.bootstrap_dns_port,
+            "detour": "DIRECT",
         }
 
     return {
         "servers": [
             bootstrap_server,
             {
+                "type": "udp",
+                "tag": "dns-dnspod",
+                "server": "119.29.29.29",
+                "server_port": 53,
+                "detour": "DIRECT",
+            },
+            {
                 "type": "https",
-                "tag": "remote",
+                "tag": REMOTE_DNS_TAG,
                 "server": "1.1.1.1",
                 "server_port": 443,
                 "path": "/dns-query",
                 "tls": {"server_name": "cloudflare-dns.com"},
-                "detour": "AI",
+                "detour": "Proxy",
             },
         ],
         "rules": rules,
         # Keep local/CN lookups direct; route all other domain lookups through proxied DoH.
         # Proxy/direct hostname bootstrap uses route.default_domain_resolver, not this fallback.
-        "final": "remote",
+        "final": REMOTE_DNS_TAG,
         "strategy": "prefer_ipv4",
+        "cache_capacity": 4096,
     }
 
 
@@ -894,7 +908,7 @@ def build_outbounds(
     outbounds.extend([*sg_group_outbounds, auto_outbound])
     outbounds.extend(
         [
-            {"type": "direct", "tag": "DIRECT"},
+            {"type": "direct", "tag": "DIRECT", "domain_resolver": dict(BOOTSTRAP_DOMAIN_RESOLVER)},
             {"type": "block", "tag": "BLOCK"},
             {
                 "type": "selector",
