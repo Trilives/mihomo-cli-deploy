@@ -40,11 +40,11 @@
 - `streaming_domain_suffixes`：走 `Streaming` 出站的流媒体域名后缀。
 - `direct_domain_suffixes`：指定直连的域名后缀。填写后会新增一个 `Direct` 特殊直连组，并把这些域名优先路由到该组（默认 `DIRECT`，可在面板切换到 `Proxy`/`Auto`），同时让它们走本地 DNS 解析。留空（默认）则不生成该组。
 - `local_bypass_domains`：本地直连域名。
-- `route_exclude_ip_cidrs`：TUN 自动路由排除网段，同时会生成直连路由规则。
+- `route_exclude_ip_cidrs`：TUN 自动路由排除网段，同时会生成直连路由规则。DNS bootstrap 不靠这里额外排除公共 DNS IP，而是在 DNS server 上显式设置 `detour`。
 - `bypass_process_names`：直连进程名，例如 `tailscaled`。
 - `tun_exclude_uids`：写入 TUN 入站的 `exclude_uid`，用于让指定系统用户的流量绕过 sing-box 自动路由。
 - `lan_panel`：是否允许局域网访问 Clash API/Web UI。`true` 时监听 `0.0.0.0:9090` 并放行私有网络访问；`false`（默认）仅监听 `127.0.0.1:9090`。命令行 `--lan-panel` 仍可强制开启（覆盖此字段）。
-- `bootstrap_dns_server`：引导 DNS（`local` 服务器）的地址，用于解析节点 `server` 域名和直连域名。默认 `223.5.5.5`（UDP）。填 `"dhcp"` 则改用 DHCP 跟随系统/路由器下发的 DNS（适合常换网络的机器，但无 DHCP 租约的环境会失效）。留空使用默认值。
+- `bootstrap_dns_server`：引导 DNS（`dns-direct` 服务器）的地址，用于解析节点 `server` 域名和直连域名。默认 `"223.5.5.5"`，适合多机器场景开箱即用；需要跟随当前系统/路由器 DNS 时可填 `"dhcp"`。
 - `bootstrap_dns_port`：引导 DNS 端口，默认 `53`。仅在 `bootstrap_dns_server` 为具体地址时生效。
 
 ## CN 规则集
@@ -129,27 +129,71 @@ lookup fd025gz8-c617.apt-hcloud.org: context deadline exceeded
 
 ```json
 "default_domain_resolver": {
-  "server": "local",
+  "server": "dns-direct",
   "strategy": "prefer_ipv4"
 }
 ```
 
 > 该全局默认已覆盖全部出站，因此不再给每个代理节点和 `DIRECT` 单独写 `domain_resolver`，避免冗余。如需对个别出站使用不同解析器，才需要在该出站上单独设置 `domain_resolver` 覆盖。
 
-`local` DNS server 默认生成成公共 DNS（UDP）：
+DNS server 使用 sing-box 1.12+ 的新版结构，并在每个 DNS server 上显式写出 `detour`，让路径选择由配置表达，而不是依赖 TUN 额外排除公共 DNS IP：
+
+```json
+[
+  {
+    "type": "udp",
+    "tag": "dns-direct",
+    "server": "223.5.5.5",
+    "server_port": 53,
+    "detour": "DIRECT"
+  },
+  {
+    "type": "udp",
+    "tag": "dns-dnspod",
+    "server": "119.29.29.29",
+    "server_port": 53,
+    "detour": "DIRECT"
+  },
+  {
+    "type": "https",
+    "tag": "dns-proxy",
+    "server": "1.1.1.1",
+    "server_port": 443,
+    "path": "/dns-query",
+    "tls": {
+      "server_name": "cloudflare-dns.com"
+    },
+    "detour": "Proxy"
+  }
+]
+```
+
+如果需要跟随当前网络的 DHCP DNS，可以在 `clash_nodes_to_singbox_config.json` 写：
 
 ```json
 {
-  "type": "udp",
-  "tag": "local",
-  "server": "223.5.5.5",
-  "server_port": 53
+  "bootstrap_dns_server": "dhcp"
 }
 ```
 
-默认用公共 DNS 是为了在任何环境（含无 DHCP 租约的 VPS/云主机）开箱即用。如果这台机器经常换网络、希望跟随路由器/系统下发的 DNS，在 `clash_nodes_to_singbox_config.json` 里设 `"bootstrap_dns_server": "dhcp"` 即生成 `{"type": "dhcp", "tag": "local"}`；需要其他固定 DNS 时则把 `bootstrap_dns_server`/`bootstrap_dns_port` 设成具体地址端口。不要把它写死成某个网关地址（如 `192.168.2.1`），否则换网后可能失效。
+注意：`detour` 的值必须匹配现有出站 tag。当前配置里的直连出站是 `DIRECT`，代理选择器是 `Proxy`，所以这里使用大写 `DIRECT` 和首字母大写 `Proxy`；如果未来出站 tag 改成小写，再同步调整 DNS `detour`。
 
-bootstrap resolver 使用 `prefer_ipv4`：优先 IPv4，避免没有稳定 IPv6 出口时直连域名解析到 AAAA 后报 `network is unreachable`；同时保留 IPv6 回退，IPv6-only 的节点/服务器仍可连通（早期版本用的 `ipv4_only` 会让这类目标连不上）。
+sing-box 不允许 DNS server `detour` 到一个完全空的 direct outbound，否则运行时报 `detour to an empty direct outbound makes no sense`。因此生成器会给 `DIRECT` 出站补上同一个 bootstrap resolver：
+
+```json
+{
+  "type": "direct",
+  "tag": "DIRECT",
+  "domain_resolver": {
+    "server": "dns-direct",
+    "strategy": "prefer_ipv4"
+  }
+}
+```
+
+本机 2026-06-10 的故障现场中，`223.5.5.5` 的路由被导入了 `singbox` TUN，`dig @223.5.5.5 ...` 超时。新的处理方式是让 `dns-direct` 显式 `detour` 到 `DIRECT`，让 `dns-proxy` 显式 `detour` 到 `Proxy`，并保留 `route.default_domain_resolver` 指向 `dns-direct`，不再把公共 DNS IP 硬塞进 TUN 排除列表。
+
+bootstrap resolver 使用 `prefer_ipv4`：优先 IPv4，避免没有稳定 IPv6 出口时直连域名解析到 AAAA 后报 `network is unreachable`；同时保留 IPv6 回退，IPv6-only 的节点/服务器仍可连通。
 
 官方参考：
 
