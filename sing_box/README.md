@@ -11,6 +11,8 @@
 - `source/downloads/`：sing-box core 和 Web UI 下载缓存
 - `Script/update_sing_box_core.sh`：下载并更新 sing-box core 和 Web UI
 - `Script/setup_sing_box_service.sh`：注册或删除 sing-box systemd 服务
+- `Script/setup_resilience.sh`：安装网络切换自愈（NetworkManager 钩子 + watchdog 定时器）
+- `Script/sing_box_healthcheck.sh`：watchdog 探针，检测代理“假死”后自动重启服务
 - `Script/download_sing_box_subscription.sh`：通过 subconverter 后端把订阅转换为 sing-box `config.json`
 - `Script/Enhance/clash_nodes_to_singbox.py`：本地兜底转换，从根目录 Mihomo `config.yaml` 提取节点并生成 sing-box `config.json`
 
@@ -127,6 +129,36 @@ sudo ./sing_box/Script/setup_sing_box_service.sh --remove
 ```bash
 sudo ./sing_box/Script/setup_sing_box_service.sh -n sing-box-main
 sudo ./sing_box/Script/setup_sing_box_service.sh -n sing-box-main --remove
+```
+
+## 网络切换自愈
+
+sing-box 用 `auto_detect_interface` 把出站绑定到上行网卡。当网卡在开机时晚于服务启动、中途掉线、或在不同网络间漫游（笔记本 / 手机热点 / 机场 WiFi 常见）时，sing-box 会卡在 `network: missing default interface`，此后所有连接（含 DNS）全部超时——但进程并不退出，`Restart=on-failure` 不会触发，代理“假死”直到被重启。`journalctl -u sing-box` 中反复出现的 `missing default interface`、`network is unreachable` 即此症状。
+
+`setup_resilience.sh` 安装两套互补的自愈机制：
+
+- **A. NetworkManager 钩子**：真实网卡 `up` 或连通性变化时自动重启 sing-box，让它重新探测网卡。解决“开机太早”和“切换网络”，从源头修复。安装到 `/etc/NetworkManager/dispatcher.d/90-<service>-restart`，会忽略 sing-box 自己的 tun 设备并对事件做防抖，避免重启风暴。
+- **B. systemd watchdog 定时器**：默认每 2 分钟通过混合代理（`127.0.0.1:7890`）探测一次，发现“有上行但代理打不通”才重启；没有上行时不动作，避免空转。兜底那些不触发 NetworkManager 事件的静默掉线。
+
+安装（幂等，可重复执行）：
+
+```bash
+sudo ./sing_box/Script/setup_resilience.sh
+```
+
+可调探测间隔或服务名：
+
+```bash
+sudo ./sing_box/Script/setup_resilience.sh --interval 90s
+sudo ./sing_box/Script/setup_resilience.sh -n sing-box-main
+```
+
+手动探测一次、查看日志、删除：
+
+```bash
+sudo systemctl start sing-box-watchdog.service
+journalctl -u sing-box-watchdog.service -f
+sudo ./sing_box/Script/setup_resilience.sh --remove
 ```
 
 ## Web UI
