@@ -245,6 +245,16 @@ python3 ./Script/Enhance/add_sg_fallback.py
 - 订阅链接本身可能包含 token；终端历史、截图和日志分享前应检查并打码。
 - 对外开放 Web UI 时请配置访问密码，并限制管理端口的可访问范围。
 
+## 测试网络出口
+
+`./test_network_exit.sh` 逐站探测当前网络到 ChatGPT、Claude、Cloudflare、ip.me 的实际出口 IP、地区与 Cloudflare 机房，用于核对分流是否符合预期。Mihomo 与 sing-box 通用。
+
+```bash
+./test_network_exit.sh           # 普通探测
+./test_network_exit.sh -4        # 强制 IPv4（确认 v4/v6 是否同一出口）
+PROXY=http://127.0.0.1:7890 ./test_network_exit.sh   # 经指定代理探测
+```
+
 ## 常见排查
 
 ### 服务启动失败
