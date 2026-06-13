@@ -27,6 +27,10 @@ RESERVED_TAGS = {
     "DNS",
 }
 DIRECT_GROUP_TAG = "Direct"
+# Toggle: when False, the Singapore SG-Auto (urltest) and SG-Fallback (selector)
+# groups are not generated, and the AI/Streaming/Proxy selectors omit them.
+# Set to False if you don't want the dedicated Singapore failover/auto-select groups.
+GENERATE_SG_GROUPS = True
 DEFAULT_PREFER = "Singapore,SG,新加坡,狮城"
 DEFAULT_OUTBOUND_CHOICES = ("Proxy", "Auto", "AI", "SG-Auto", "SG-Fallback")
 SG_EXCLUDE_KEYWORDS = ("实验",)
@@ -856,7 +860,12 @@ def build_outbounds(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     node_tags = [node["tag"] for node in converted_nodes]
     selectable_tags = [tag for tag in node_tags if not is_informational_node(tag)]
-    sg_tags = [tag for tag in selectable_tags if is_preferred_node(tag, prefer_keywords) and not is_excluded_sg_node(tag)]
+    if GENERATE_SG_GROUPS:
+        sg_tags = [
+            tag for tag in selectable_tags if is_preferred_node(tag, prefer_keywords) and not is_excluded_sg_node(tag)
+        ]
+    else:
+        sg_tags = []
     has_sg_auto = bool(sg_tags)
 
     outbounds: list[dict[str, Any]] = list(converted_nodes)
@@ -1142,7 +1151,9 @@ def main() -> int:
         if not converted_nodes:
             raise ConversionError("No proxy nodes were converted successfully.")
 
-        if not any(is_preferred_node(node["tag"], prefer_keywords) for node in converted_nodes):
+        if not GENERATE_SG_GROUPS:
+            print("info: GENERATE_SG_GROUPS disabled; SG-Auto/SG-Fallback groups will not be generated")
+        elif not any(is_preferred_node(node["tag"], prefer_keywords) for node in converted_nodes):
             print("warning: no preferred Singapore nodes matched; SG-Auto will not be generated")
 
         config, outbound_info = build_singbox_config(
