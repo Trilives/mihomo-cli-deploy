@@ -5,9 +5,19 @@
 ## 文件说明
 
 - `clash_nodes_to_singbox.py`：转换 Clash/Mihomo 节点为 sing-box `config.json`。
-- `clash_nodes_to_singbox_config.json`：转换脚本的自定义配置文件，用于调整 DNS、路由、直连进程和 TUN UID 排除规则。
+- `clash_nodes_to_singbox_config.json`：转换脚本的自定义配置文件，用于调整 DNS、路由、直连进程和 TUN UID 排除规则。该文件含本地私有信息（如 EasyTier relay 域名、UID），已被 `.gitignore` 忽略、不纳入版本控制。
+- `clash_nodes_to_singbox_config.json.example`：脱敏后的样本，供首次使用时复制。
 
 ## 基本用法
+
+首次使用先从样本复制出本地配置，再按需修改（如 `direct_domain_suffixes` 里的 EasyTier relay 域名、`tun_exclude_uids` 里的真实 UID）：
+
+```bash
+cp ./sing_box/Script/Enhance/clash_nodes_to_singbox_config.json.example \
+   ./sing_box/Script/Enhance/clash_nodes_to_singbox_config.json
+```
+
+然后运行转换脚本：
 
 ```bash
 ./sing_box/Script/Enhance/clash_nodes_to_singbox.py
