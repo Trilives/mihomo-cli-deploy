@@ -111,9 +111,33 @@ EasyTier 的 P2P peer IP 是动态发现的，不应靠 `easytier_bypass_domains
 
 - 让 EasyTier 用独立系统用户运行，例如 `easytier`。
 - 添加高于 sing-box `9000+` 规则的策略路由，例如 `ip rule add pref 1000 uidrange 997-997 lookup main`。
-- 在 `clash_nodes_to_singbox_config.json` 中设置 `tun_exclude_uids`，让 sing-box TUN 也显式排除 EasyTier UID。
+- 在 `clash_nodes_to_singbox_config.json` 中设置 `tun_exclude_uids`，让 sing-box TUN 也显式排除 EasyTier UID（取值必须是 EasyTier 进程的真实 UID，例如 `id easytier` 查到的 `997`）。
 
 这样可以保留 sing-box `strict_route`，同时让 EasyTier 动态 P2P 数据面稳定走物理网卡。
+
+### 注意：UID 绕过只覆盖数据面，不覆盖 DNS 解析
+
+2026-06-24 排查过一次故障：代理节点失效时，EasyTier 也跟着断，只有停掉 sing-box 服务才能恢复 EasyTier 连接。
+
+根因不是数据面，而是 **peer 域名的 DNS 解析**。EasyTier 的 peer 若用域名配置（例如 `uri = "udp://225284.xyz:11010"`），连接前要先解析域名，而这条解析路径并没有被 UID 规则绕过：
+
+1. EasyTier(UID 997) 解析域名 → 走系统解析 `getaddrinfo` → `127.0.0.53`（systemd-resolved）。
+2. systemd-resolved 把全机 DNS（singbox link 带 `~.` 全局路由域）转发进 sing-box 的 `172.19.0.2`；而 systemd-resolved 自己跑在 **另一个 UID（如 `systemd-resolve`）**，不在 `uidrange 997-997` 规则内，照样进 sing-box。
+3. 该域名不命中任何 DNS 规则时落到 `final`，而 `final` 默认走 `dns-proxy`（DoH 经 `Proxy` 出站）。节点一失效，`dns-proxy` 解析超时 → 域名解析失败 → EasyTier 无法重连。
+4. 停掉 sing-box 后，systemd-resolved 回退到物理网卡的直连 DNS，解析恢复，EasyTier 随之重连——这正是“停 sing-box 才恢复”的原因。
+
+> 即 UID 绕过只修了 EasyTier 的**数据面**，没修它的**名字解析**；而全机 DNS 都被 sing-box 接管、未命中规则的域名又兜底走代理节点，于是节点一死、解析就死、EasyTier 重连就死。这也是个更广的脆弱点：节点失效时，整台机器所有“未命中规则的域名”都会解析失败，不只是 EasyTier。
+
+**修法**：把 EasyTier 的 peer/relay 域名加入 `direct_domain_suffixes`，让它走 `dns-direct`（如 `223.5.5.5` 经 `DIRECT`），解析就与节点死活脱钩：
+
+```json
+"direct_domain_suffixes": [
+  "dashscope.aliyuncs.com",
+  "225284.xyz"
+]
+```
+
+relay 是固定的 bootstrap 入口，不是动态 P2P peer，单独列它不违反“不维护动态 peer IP 列表”的原则。若想更彻底地与 DNS 解耦，也可在 `/etc/hosts` 钉死该域名（`nsswitch` 为 `files … dns`，会优先命中），或在 EasyTier 配置里直接写 relay IP。
 
 ## DNS bootstrap 与节点域名解析
 

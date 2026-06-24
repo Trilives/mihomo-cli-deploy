@@ -42,7 +42,8 @@
     "scdn.co"
   ],
   "direct_domain_suffixes": [
-    "dashscope.aliyuncs.com"
+    "dashscope.aliyuncs.com",
+    "your-easytier-relay.example.com"
   ],
   "local_bypass_domains": [
     "localhost"
@@ -65,6 +66,6 @@
     "tailscale",
     "tailscaled"
   ],
-  "tun_exclude_uids": [980],
+  "tun_exclude_uids": [997],
   "lan_panel": false
 }

@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+sing_box/Script/Enhance/clash_nodes_to_singbox_config.json
+!sing_box/Script/Enhance/clash_nodes_to_singbox_config.json.example
 
 # Runtime files
 .run/
