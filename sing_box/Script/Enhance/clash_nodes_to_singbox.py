@@ -21,6 +21,8 @@ RESERVED_TAGS = {
     "Auto",
     "SG-Auto",
     "SG-Fallback",
+    "HK-Auto",
+    "HK-Fallback",
     "Fallback",
     "DIRECT",
     "BLOCK",
@@ -31,9 +33,15 @@ DIRECT_GROUP_TAG = "Direct"
 # groups are not generated, and the AI/Streaming/Proxy selectors omit them.
 # Set to False if you don't want the dedicated Singapore failover/auto-select groups.
 GENERATE_SG_GROUPS = True
+# Toggle: when False, the Hong Kong HK-Auto (urltest) and HK-Fallback (selector)
+# groups are not generated, and the AI/Streaming/Proxy selectors omit them.
+# Set to False if you don't want the dedicated Hong Kong failover/auto-select groups.
+GENERATE_HK_GROUPS = True
 DEFAULT_PREFER = "Singapore,SG,新加坡,狮城"
-DEFAULT_OUTBOUND_CHOICES = ("Proxy", "Auto", "AI", "SG-Auto", "SG-Fallback")
+DEFAULT_HK_PREFER = "Hong Kong,HongKong,HK,香港"
+DEFAULT_OUTBOUND_CHOICES = ("Proxy", "Auto", "AI", "SG-Auto", "SG-Fallback", "HK-Auto", "HK-Fallback")
 SG_EXCLUDE_KEYWORDS = ("实验",)
+HK_EXCLUDE_KEYWORDS = ("实验",)
 INFO_NODE_PREFIXES = ("traffic:", "expire:", "剩余流量", "过期时间")
 SING_BOX_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_CUSTOM_CONFIG_PATH = Path(__file__).with_name("clash_nodes_to_singbox_config.json")
@@ -326,6 +334,10 @@ def is_preferred_node(name: str, prefer_keywords: list[str]) -> bool:
 
 def is_excluded_sg_node(name: str) -> bool:
     return any(keyword in name for keyword in SG_EXCLUDE_KEYWORDS)
+
+
+def is_excluded_hk_node(name: str) -> bool:
+    return any(keyword in name for keyword in HK_EXCLUDE_KEYWORDS)
 
 
 def is_informational_node(name: str) -> bool:
@@ -809,9 +821,12 @@ def build_rule_sets() -> list[dict[str, Any]]:
 def build_route(
     default_outbound: str,
     has_sg_auto: bool,
+    has_hk_auto: bool,
     custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
 ) -> dict[str, Any]:
     if default_outbound in {"SG-Auto", "SG-Fallback"} and not has_sg_auto:
+        default_outbound = "Proxy"
+    if default_outbound in {"HK-Auto", "HK-Fallback"} and not has_hk_auto:
         default_outbound = "Proxy"
     rules: list[dict[str, Any]] = [
         {"process_name": custom_config.bypass_process_names, "action": "route", "outbound": "DIRECT"},
@@ -856,6 +871,7 @@ def build_route(
 def build_outbounds(
     converted_nodes: list[dict[str, Any]],
     prefer_keywords: list[str],
+    hk_prefer_keywords: list[str],
     custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     node_tags = [node["tag"] for node in converted_nodes]
@@ -867,6 +883,15 @@ def build_outbounds(
     else:
         sg_tags = []
     has_sg_auto = bool(sg_tags)
+    if GENERATE_HK_GROUPS:
+        hk_tags = [
+            tag
+            for tag in selectable_tags
+            if is_preferred_node(tag, hk_prefer_keywords) and not is_excluded_hk_node(tag)
+        ]
+    else:
+        hk_tags = []
+    has_hk_auto = bool(hk_tags)
 
     outbounds: list[dict[str, Any]] = list(converted_nodes)
     sg_group_outbounds: list[dict[str, Any]] = []
@@ -883,6 +908,28 @@ def build_outbounds(
         )
         sg_group_outbounds.append({"type": "selector", "tag": "SG-Fallback", "outbounds": sg_tags, "default": sg_tags[0]})
 
+    hk_group_outbounds: list[dict[str, Any]] = []
+    if has_hk_auto:
+        hk_group_outbounds.append(
+            {
+                "type": "urltest",
+                "tag": "HK-Auto",
+                "outbounds": hk_tags,
+                "url": "https://www.gstatic.com/generate_204",
+                "interval": "5m",
+                "tolerance": 50,
+            }
+        )
+        hk_group_outbounds.append({"type": "selector", "tag": "HK-Fallback", "outbounds": hk_tags, "default": hk_tags[0]})
+
+    # Region failover/auto-select groups, in the order they appear inside the
+    # AI/Streaming/Proxy selectors (Singapore first, then Hong Kong).
+    region_groups: list[str] = []
+    if has_sg_auto:
+        region_groups.extend(["SG-Auto", "SG-Fallback"])
+    if has_hk_auto:
+        region_groups.extend(["HK-Auto", "HK-Fallback"])
+
     auto_outbound = {
         "type": "urltest",
         "tag": "Auto",
@@ -893,28 +940,27 @@ def build_outbounds(
     }
 
     ai_default = "Proxy"
-    ai_outbounds = ["Proxy", "SG-Auto", "SG-Fallback", "Auto", "DIRECT"] if has_sg_auto else ["Proxy", "Auto", "DIRECT"]
+    ai_outbounds = ["Proxy", *region_groups, "Auto", "DIRECT"]
     outbounds.append({"type": "selector", "tag": "AI", "outbounds": ai_outbounds, "default": ai_default})
 
     streaming_default = "Proxy"
-    streaming_outbounds = (
-        ["Proxy", "SG-Auto", "SG-Fallback", "Auto", "DIRECT"] if has_sg_auto else ["Proxy", "Auto", "DIRECT"]
-    )
+    streaming_outbounds = ["Proxy", *region_groups, "Auto", "DIRECT"]
     outbounds.append(
         {"type": "selector", "tag": "Streaming", "outbounds": streaming_outbounds, "default": streaming_default}
     )
 
-    proxy_default = "SG-Auto" if has_sg_auto else "Auto"
-    proxy_outbounds: list[str] = []
     if has_sg_auto:
-        proxy_outbounds.extend(["SG-Auto", "SG-Fallback"])
-    proxy_outbounds.append("Auto")
-    proxy_outbounds.extend([*selectable_tags, "DIRECT"])
+        proxy_default = "SG-Auto"
+    elif has_hk_auto:
+        proxy_default = "HK-Auto"
+    else:
+        proxy_default = "Auto"
+    proxy_outbounds: list[str] = [*region_groups, "Auto", *selectable_tags, "DIRECT"]
     outbounds.append(
         {"type": "selector", "tag": "Proxy", "outbounds": proxy_outbounds, "default": proxy_default}
     )
 
-    outbounds.extend([*sg_group_outbounds, auto_outbound])
+    outbounds.extend([*sg_group_outbounds, *hk_group_outbounds, auto_outbound])
     outbounds.extend(
         [
             {"type": "direct", "tag": "DIRECT", "domain_resolver": dict(BOOTSTRAP_DOMAIN_RESOLVER)},
@@ -945,6 +991,9 @@ def build_outbounds(
         "has_sg_auto": has_sg_auto,
         "has_sg_fallback": has_sg_auto,
         "sg_count": len(sg_tags),
+        "has_hk_auto": has_hk_auto,
+        "has_hk_fallback": has_hk_auto,
+        "hk_count": len(hk_tags),
         "auto_count": len(selectable_tags),
         "proxy_default": proxy_default,
         "ai_default": ai_default,
@@ -957,14 +1006,18 @@ def build_outbounds(
 def build_singbox_config(
     converted_nodes: list[dict[str, Any]],
     prefer_keywords: list[str],
+    hk_prefer_keywords: list[str],
     default_outbound: str,
     output_path: Path,
     custom_config: CustomConfig = DEFAULT_CUSTOM_CONFIG,
     lan_access: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    outbounds, outbound_info = build_outbounds(converted_nodes, prefer_keywords, custom_config)
+    outbounds, outbound_info = build_outbounds(converted_nodes, prefer_keywords, hk_prefer_keywords, custom_config)
     if default_outbound in {"SG-Auto", "SG-Fallback"} and not outbound_info["has_sg_auto"]:
         print(f"warning: --default-outbound {default_outbound} requested but no Singapore group was generated; using Proxy")
+        default_outbound = "Proxy"
+    if default_outbound in {"HK-Auto", "HK-Fallback"} and not outbound_info["has_hk_auto"]:
+        print(f"warning: --default-outbound {default_outbound} requested but no Hong Kong group was generated; using Proxy")
         default_outbound = "Proxy"
     config = {
         "log": {"level": "warning"},
@@ -974,6 +1027,7 @@ def build_singbox_config(
         "route": build_route(
             default_outbound,
             outbound_info["has_sg_auto"],
+            outbound_info["has_hk_auto"],
             custom_config,
         ),
         "experimental": build_experimental(output_path, lan_access),
@@ -1025,6 +1079,14 @@ def validate_config_basic(config: dict[str, Any]) -> None:
         sg_fallback = next(item for item in config["outbounds"] if item["tag"] == "SG-Fallback")
         if not sg_fallback.get("outbounds"):
             raise ConversionError("SG-Fallback outbounds must be non-empty")
+    if "HK-Auto" in tag_set:
+        hk_auto = next(item for item in config["outbounds"] if item["tag"] == "HK-Auto")
+        if not hk_auto.get("outbounds"):
+            raise ConversionError("HK-Auto outbounds must be non-empty")
+    if "HK-Fallback" in tag_set:
+        hk_fallback = next(item for item in config["outbounds"] if item["tag"] == "HK-Fallback")
+        if not hk_fallback.get("outbounds"):
+            raise ConversionError("HK-Fallback outbounds must be non-empty")
     auto = next((item for item in config["outbounds"] if item["tag"] == "Auto"), None)
     if not auto or not auto.get("outbounds"):
         raise ConversionError("Auto outbounds must be non-empty")
@@ -1055,6 +1117,9 @@ def print_summary(
     print(f"  SG-Auto generated: {outbound_info['has_sg_auto']}")
     print(f"  SG-Fallback generated: {outbound_info['has_sg_fallback']}")
     print(f"  SG-Auto node count: {outbound_info['sg_count']}")
+    print(f"  HK-Auto generated: {outbound_info['has_hk_auto']}")
+    print(f"  HK-Fallback generated: {outbound_info['has_hk_fallback']}")
+    print(f"  HK-Auto node count: {outbound_info['hk_count']}")
     print(f"  Auto node count: {outbound_info['auto_count']}")
     print(f"  Proxy default outbound: {outbound_info['proxy_default']}")
     print(f"  AI default outbound: {outbound_info['ai_default']}")
@@ -1093,7 +1158,10 @@ def main() -> int:
     )
     parser.add_argument("input", nargs="?", default="./config.yaml", help="Clash/Mihomo config.yaml")
     parser.add_argument("output", nargs="?", default="./sing_box/config.json", help="sing-box config.json")
-    parser.add_argument("--prefer", default=DEFAULT_PREFER, help="comma separated preferred node keywords")
+    parser.add_argument("--prefer", default=DEFAULT_PREFER, help="comma separated preferred Singapore node keywords")
+    parser.add_argument(
+        "--hk-prefer", default=DEFAULT_HK_PREFER, help="comma separated preferred Hong Kong node keywords"
+    )
     parser.add_argument("--default-outbound", default="Proxy", choices=DEFAULT_OUTBOUND_CHOICES)
     parser.add_argument(
         "--custom-config",
@@ -1118,6 +1186,7 @@ def main() -> int:
 
     input_path = Path(args.input)
     prefer_keywords = parse_prefer_keywords(args.prefer)
+    hk_prefer_keywords = parse_prefer_keywords(args.hk_prefer)
 
     try:
         output_path = validate_output_path(Path(args.output))
@@ -1156,9 +1225,15 @@ def main() -> int:
         elif not any(is_preferred_node(node["tag"], prefer_keywords) for node in converted_nodes):
             print("warning: no preferred Singapore nodes matched; SG-Auto will not be generated")
 
+        if not GENERATE_HK_GROUPS:
+            print("info: GENERATE_HK_GROUPS disabled; HK-Auto/HK-Fallback groups will not be generated")
+        elif not any(is_preferred_node(node["tag"], hk_prefer_keywords) for node in converted_nodes):
+            print("warning: no preferred Hong Kong nodes matched; HK-Auto will not be generated")
+
         config, outbound_info = build_singbox_config(
             converted_nodes,
             prefer_keywords,
+            hk_prefer_keywords,
             args.default_outbound,
             output_path,
             custom_config,

@@ -30,7 +30,7 @@ cp ./sing_box/Script/Enhance/clash_nodes_to_singbox_config.json.example \
 
 ```bash
 ./sing_box/Script/Enhance/clash_nodes_to_singbox.py ./config.yaml ./sing_box/config.json \
-  --prefer 'Singapore,SG,新加坡,狮城' --default-outbound Proxy
+  --prefer 'Singapore,SG,新加坡,狮城' --hk-prefer 'Hong Kong,HongKong,HK,香港' --default-outbound Proxy
 ./sing_box/Script/Enhance/clash_nodes_to_singbox.py --custom-config /path/to/config.json
 ./sing_box/Script/Enhance/clash_nodes_to_singbox.py --strict   # 遇不支持/字段不全的节点直接失败
 ```
@@ -55,10 +55,13 @@ cp ./sing_box/Script/Enhance/clash_nodes_to_singbox_config.json.example \
 - `Proxy`：主选择器，内部分组优先，便于常规切换。过滤订阅说明伪节点（`Traffic:`、`Expire:`、`剩余流量`、`过期时间` 等）。
 - `Auto`：全节点 `urltest`，同样过滤伪节点。
 - `SG-Auto` / `SG-Fallback`：按 `--prefer` 关键词从首选新加坡节点生成的自动测速组 / 手动选择组；名称含 `实验` 的节点不进这两个组，但仍留在 `Auto` 和 `Proxy`。
-- `AI` / `Streaming`：分别匹配 `ai_domain_suffixes` / `streaming_domain_suffixes`，默认选 `Proxy`，也可切到 `SG-Auto`/`SG-Fallback`/`Auto`/`DIRECT`。
+- `HK-Auto` / `HK-Fallback`：按 `--hk-prefer` 关键词从首选香港节点生成的自动测速组 / 手动选择组，规则与新加坡组一致（同样排除名称含 `实验` 的节点）。
+- `AI` / `Streaming`：分别匹配 `ai_domain_suffixes` / `streaming_domain_suffixes`，默认选 `Proxy`，也可切到 `SG-Auto`/`SG-Fallback`/`HK-Auto`/`HK-Fallback`/`Auto`/`DIRECT`。
 - `Direct`：可选特殊直连组，仅 `direct_domain_suffixes` 非空时生成，优先级高于 `AI`/`Streaming`/CN 分流。
 
-顶层 `outbounds` 先放真实节点和常用策略组，再放 `SG-Auto`/`SG-Fallback`/`Auto` 等自动/地区分组，`Fallback` 放最后。TUN 自动路由排除 `127.0.0.0/8`、`0.0.0.0/8`、`::1/128`，并强制 `localhost` 与本机地址走 `DIRECT`。
+> **地区组开关**：脚本顶部 `GENERATE_SG_GROUPS` / `GENERATE_HK_GROUPS` 两个常量分别控制新加坡、香港地区组（默认均为 `True`）。设为 `False` 后不再生成对应的 `*-Auto`/`*-Fallback` 组，`AI`/`Streaming`/`Proxy` 选择器也会自动省略它们；即便开着，若没有匹配 `--prefer`/`--hk-prefer` 的节点也不会生成。
+
+顶层 `outbounds` 先放真实节点和常用策略组，再放 `SG-Auto`/`SG-Fallback`/`HK-Auto`/`HK-Fallback`/`Auto` 等自动/地区分组，`Fallback` 放最后。`Proxy` 默认依次优先 `SG-Auto` → `HK-Auto` → `Auto`。TUN 自动路由排除 `127.0.0.0/8`、`0.0.0.0/8`、`::1/128`，并强制 `localhost` 与本机地址走 `DIRECT`。
 
 ### 校验
 
@@ -79,7 +82,7 @@ cp ./sing_box/Script/Enhance/clash_nodes_to_singbox_config.json.example \
 
 三步终端交互：
 
-1. **选地区 / 分组**：列出有节点的主要地区（🇭🇰 香港 / 🇹🇼 台湾 / 🇯🇵 日本 / 🇰🇷 韩国 / 🇸🇬 新加坡 / 🇺🇸 美国），其余归「🌐 其他地区」；最后一项「🧭 分组」用于选 `SG-Auto`/`SG-Fallback`/`Auto` 等子分组。
+1. **选地区 / 分组**：列出有节点的主要地区（🇭🇰 香港 / 🇹🇼 台湾 / 🇯🇵 日本 / 🇰🇷 韩国 / 🇸🇬 新加坡 / 🇺🇸 美国），其余归「🌐 其他地区」；最后一项「🧭 分组」用于选 `SG-Auto`/`SG-Fallback`/`HK-Auto`/`HK-Fallback`/`Auto` 等子分组。
 2. **选具体节点 / 分组**（`b` 返回上一步，`q` 退出）。
 3. **是否重启**：选 `y` 则以 `sudo` 运行 `Script/setup_sing_box_service.sh`（终端提示输入密码）。
 
