@@ -49,6 +49,7 @@ config.yaml.bak.*
 *.tmp
 *.swp
 *~
+tmp/
 
 # Optional OS junk
 .DS_Store
