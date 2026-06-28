@@ -2,8 +2,9 @@
 """Interactive sing-box node selector.
 
 本质上是“把选中项设为代理分组（默认 Proxy）的第一个成员”的脚本：sing-box
-selector 在没有持久化选择时取第一个成员，把它固定下来后，其他脚本重启
-sing-box 时就不会被 SG-Auto 之类的 urltest 自动测速组乱切节点。
+selector 在没有持久化选择时取第一个成员，而重启服务时这个“第一个成员”
+往往是配置生成脚本原始排在最前的节点（不可控、未必是想要的）。把选中项
+固定到第一位后，重启服务就会用上想要的节点。
 
 三步式终端交互：
   1. 选地区（主要国家/地区，其余归入“其他”）或“分组”（列出子分组如 SG-Auto）
@@ -197,8 +198,8 @@ def persist_first(path: Path, config: dict, group_tag: str, node: str) -> None:
     """把 node 移到目标分组成员的第一位，并对齐 default。
 
     sing-box selector 在没有持久化选择时取第一个成员；但若存在 default，则
-    default 优先级更高。因此两者都设成 node，重启后才稳定停在该项、不会被
-    SG-Auto 之类的 urltest 自动测速组乱切。
+    default 优先级更高。重启服务时这个“第一个/默认”成员可能是配置生成脚本
+    原始排在最前的节点（不可控）。因此两者都设成 node，重启后才稳定停在该项。
     """
     for o in config.get("outbounds", []):
         if o.get("type") == "selector" and o.get("tag") == group_tag:
