@@ -1,7 +1,7 @@
 # mihomo CLI 部署系统
 
 在 Linux 上交互式部署 / 管理 **mihomo（Clash.Meta）** 的命令行系统。一个入口
-`./mihomo.sh`，全流程交互完成：**初始化 / 更改配置 / 网络测试 / 卸载**。
+`./mihomo.sh`，全流程交互完成：**初始化 / 更改配置 / 暂停启动 / 网络测试 / 卸载**。
 
 - **直用机场订阅**：mihomo 原生吃 Clash 配置，本系统**直接消费机场的 Clash/mihomo
   订阅**，只最小改写部署必需字段（端口 / 局域网 / 外部控制器 / TUN / 面板），机场自带的
@@ -80,6 +80,8 @@ chmod +x mihomo.sh
 ./mihomo.sh init        # 初始化
 ./mihomo.sh modify      # 更改配置
 ./mihomo.sh nettest     # 网络测试
+./mihomo.sh pause       # 暂停主服务 + 全部伴生单元（watchdog / 定时器）
+./mihomo.sh resume      # 启动主服务 + 全部伴生单元
 ./mihomo.sh uninstall   # 卸载
 ./mihomo.sh update      # 更新内核/UI/geo 并同步重启（每周定时器调用）
 

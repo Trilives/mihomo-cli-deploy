@@ -16,7 +16,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from . import paths, shell
+from . import menu, paths, shell
 
 DEFAULT_NAME = "mihomo"
 CONFLICTING_NAME = "sing-box"
@@ -165,10 +165,83 @@ def status(name: str = DEFAULT_NAME) -> None:
     shell.run(["systemctl", "status", "--no-pager", f"{name}.service"], check=False)
 
 
+# --------------------------------------------------------------------------- #
+# 统一开关：主服务 + 伴生单元（自愈 watchdog / 每周更新定时器）一起暂停 / 启动
+# --------------------------------------------------------------------------- #
+def _companion_units() -> list[str]:
+    """已安装的伴生 systemd 单元。运行中时会重启或触碰主服务（尤其 watchdog 会把
+    被停掉的主服务又拉起来），所以暂停 / 启动必须把它们一并带上。"""
+    from . import resilience, timer
+
+    units: list[str] = []
+    if resilience.is_installed():
+        units.append(f"{resilience.WATCHDOG_NAME}.timer")
+    if timer.is_installed():
+        units.append(f"{timer.TIMER_NAME}.timer")
+    return units
+
+
+def _unit_active(unit: str) -> bool:
+    """单元是否处于 active（systemctl is-active，无需 root）。"""
+    r = shell.run(["systemctl", "is-active", unit], check=False, capture=True)
+    return (r.stdout or "").strip() == "active"
+
+
+def is_active(name: str = DEFAULT_NAME) -> bool:
+    return _unit_active(f"{name}.service")
+
+
+def pause(name: str = DEFAULT_NAME) -> None:
+    """暂停主服务及全部伴生单元（运行时停止；单元仍保持开机自启，重启后自动恢复运行）。"""
+    if not is_installed(name):
+        shell.warn(f"服务 {name} 未安装，无需暂停。")
+        return
+    companions = _companion_units()
+    shell.ensure_sudo("暂停服务")
+    # 先停伴生 watchdog，否则刚停掉主服务它又会拉起来
+    for unit in companions:
+        shell.run_root(["systemctl", "stop", unit], check=False, capture=True)
+    shell.run_root(["systemctl", "stop", f"{name}.service"], check=False)
+    shell.ok(f"已暂停：{name}.service" + (f" + {len(companions)} 个伴生单元" if companions else ""))
+    shell.info("提示：暂停为运行时停止，重启系统后会自动恢复运行。")
+
+
+def resume(name: str = DEFAULT_NAME) -> None:
+    """启动主服务及全部已安装的伴生单元。"""
+    if not is_installed(name):
+        shell.warn(f"服务 {name} 未安装，请先执行『初始化』。")
+        return
+    companions = _companion_units()
+    shell.ensure_sudo("启动服务")
+    shell.run_root(["systemctl", "start", f"{name}.service"], check=False)
+    for unit in companions:
+        shell.run_root(["systemctl", "start", unit], check=False, capture=True)
+    shell.ok(f"已启动：{name}.service" + (f" + {len(companions)} 个伴生单元" if companions else ""))
+
+
+def toggle_flow(name: str = DEFAULT_NAME) -> None:
+    """主菜单『暂停 / 启动服务』统一入口：展示主服务与伴生单元状态，整体切换。"""
+    if not is_installed(name):
+        shell.warn("服务尚未安装，请先执行『初始化（首次部署）』。")
+        return
+    active = is_active(name)
+    shell.header("暂停 / 启动服务")
+    print(f"  主服务 {name}.service：{'运行中' if active else '已停止'}")
+    for unit in _companion_units():
+        print(f"  伴生单元 {unit}：{'运行中' if _unit_active(unit) else '已停止'}")
+    action = "暂停" if active else "启动"
+    try:
+        if not menu.confirm(f"确认{action}全部服务？", default=True):
+            return
+    except menu.Cancelled:
+        return
+    pause(name) if active else resume(name)
+
+
 def run(argv: list[str] | None = None) -> int:
     import argparse
     p = argparse.ArgumentParser(prog="mihomo_deploy.service")
-    p.add_argument("action", choices=["install", "remove", "sync", "status"])
+    p.add_argument("action", choices=["install", "remove", "sync", "status", "pause", "resume"])
     p.add_argument("-n", "--name", default=DEFAULT_NAME)
     p.add_argument("--no-start", action="store_true")
     args = p.parse_args(argv)
@@ -179,6 +252,10 @@ def run(argv: list[str] | None = None) -> int:
             remove(args.name)
         elif args.action == "sync":
             sync_and_restart(args.name)
+        elif args.action == "pause":
+            pause(args.name)
+        elif args.action == "resume":
+            resume(args.name)
         else:
             status(args.name)
     except (RuntimeError, shell.CommandError) as exc:

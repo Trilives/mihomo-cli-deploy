@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 
-from . import shell
+from . import service, shell
 from .flows import init, modify, nettest, uninstall
 from .menu import Cancelled, select
 
@@ -28,13 +28,22 @@ _FLOWS = {
     "nettest": nettest.run,
     "uninstall": uninstall.run,
     "update": _update,
+    "pause": service.pause,
+    "resume": service.resume,
 }
 
 
+def _switch_label() -> str:
+    """主菜单服务开关项标签：随主服务当前状态变化。"""
+    if not service.is_installed():
+        return "暂停 / 启动服务"
+    return "暂停服务 ⏸" if service.is_active() else "启动服务 ▶"
+
+
 def _interactive() -> int:
-    options = ["初始化（首次部署）", "更改配置", "网络测试", "卸载所有服务"]
-    actions = [init.run, modify.run, nettest.run, uninstall.run]
     while True:
+        options = ["初始化（首次部署）", "更改配置", _switch_label(), "网络测试", "卸载所有服务"]
+        actions = [init.run, modify.run, service.toggle_flow, nettest.run, uninstall.run]
         try:
             idx = select("mihomo 部署系统", options, back_label="退出")
         except Cancelled:
@@ -54,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv:
         cmd = argv[0]
         if cmd in ("-h", "--help", "help"):
-            print("用法: mihomo.sh [init|modify|uninstall|update]")
+            print("用法: mihomo.sh [init|modify|uninstall|update|pause|resume]")
             print("不带参数则进入交互式主菜单。")
             return 0
         fn = _FLOWS.get(cmd)
