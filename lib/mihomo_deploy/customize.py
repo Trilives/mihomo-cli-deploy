@@ -53,10 +53,13 @@ DEFAULTS: dict[str, Any] = {
     "base64_local_fallback": False,
     "github_mirror": "",
     "download_proxy": "",
-    # —— 分流叠加字段（仅 enable_overlay 时生效）——
-    "enable_overlay": False,
+    "webui_port": 9091,
+    # —— 地区自动测速聚合组（独立开关，不依赖 overlay）——
+    "enable_region_groups": False,
     "generate_sg_groups": False,
     "generate_hk_groups": False,
+    # —— 分流叠加字段（仅 enable_overlay 时生效）——
+    "enable_overlay": False,
     "ai_domain_suffixes": AI_DOMAIN_SUFFIXES,
     "streaming_domain_suffixes": STREAMING_DOMAIN_SUFFIXES,
     "direct_domain_suffixes": [],
@@ -114,14 +117,16 @@ _BOOL_FIELDS = {
     "enable_tun": "TUN 模式（全局透明代理）",
     "lan_proxy": "局域网代理（其他主机可用本机代理）",
     "lan_panel": "LAN 面板暴露",
-    "enable_overlay": "启用自定义分流叠加",
-    "generate_sg_groups": "叠加：生成新加坡地区组",
-    "generate_hk_groups": "叠加：生成香港地区组",
+    "enable_region_groups": "地区自动测速聚合组（SG/HK，可直接选用）",
+    "generate_sg_groups": "├ 生成新加坡聚合组（SG-Auto）",
+    "generate_hk_groups": "├ 生成香港聚合组（HK-Auto）",
+    "enable_overlay": "启用自定义分流叠加（AI / 流媒体）",
     "base64_local_fallback": "base64 应急本地解析",
 }
 _SCALAR_FIELDS = {
     "tun_stack": "TUN 协议栈（gvisor/system/mixed）",
     "secret": "面板密钥 secret",
+    "webui_port": "独立 Web 面板端口（根路径直开）",
     "bootstrap_dns_server": "引导 DNS 服务器",
     "bootstrap_dns_port": "引导 DNS 端口",
     "subconverter_backend": "subconverter 后端",
@@ -136,6 +141,7 @@ _FIELD_ORDER = [
     "lan_proxy",
     "lan_panel",
     "secret",
+    "webui_port",
     "download_proxy",
     "github_mirror",
     "subconverter_backend",
@@ -144,11 +150,12 @@ _FIELD_ORDER = [
     "tun_route_exclude_cidrs",
     "tun_exclude_uids",
     "base64_local_fallback",
-    "enable_overlay",
+    "enable_region_groups",
     "generate_sg_groups",
     "generate_hk_groups",
     "prefer_keywords",
     "hk_prefer_keywords",
+    "enable_overlay",
     "ai_domain_suffixes",
     "streaming_domain_suffixes",
     "direct_domain_suffixes",
@@ -266,7 +273,7 @@ def _edit_scalar(cfg: dict[str, Any], key: str, label: str) -> bool:
         val = menu.ask(f"{label}（留空清除）", default=cur, allow_empty=True)
     except menu.Cancelled:
         return False
-    if key == "bootstrap_dns_port":
+    if key in ("bootstrap_dns_port", "webui_port"):
         try:
             cfg[key] = int(val)
         except ValueError:

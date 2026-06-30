@@ -171,11 +171,13 @@ def status(name: str = DEFAULT_NAME) -> None:
 def _companion_units() -> list[str]:
     """已安装的伴生 systemd 单元。运行中时会重启或触碰主服务（尤其 watchdog 会把
     被停掉的主服务又拉起来），所以暂停 / 启动必须把它们一并带上。"""
-    from . import resilience, timer
+    from . import resilience, timer, webui
 
     units: list[str] = []
     if resilience.is_installed():
         units.append(f"{resilience.WATCHDOG_NAME}.timer")
+    if webui.is_installed():
+        units.append(f"{webui.WEBUI_NAME}.service")
     if timer.is_installed():
         units.append(f"{timer.TIMER_NAME}.timer")
     return units

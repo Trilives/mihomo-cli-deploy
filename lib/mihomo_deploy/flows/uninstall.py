@@ -12,11 +12,12 @@ def run() -> None:
         "systemd 服务",
         "网络自愈（NM 钩子 + watchdog）",
         "每周更新定时器",
+        "独立 Web 面板服务",
         "清理产物（内核 / UI / 下载缓存 / geo 数据）",
         "清理所有订阅与配置（含 state/）",
     ]
     try:
-        chosen = menu.multiselect("卸载（勾选要移除的项）", items, default_on=(0, 1, 2))
+        chosen = menu.multiselect("卸载（勾选要移除的项）", items, default_on=(0, 1, 2, 3))
     except menu.Cancelled:
         return
     if not chosen:
@@ -29,7 +30,7 @@ def run() -> None:
         shell.info("已取消。")
         return
 
-    actions = {0: _svc, 1: _resilience, 2: _timer, 3: _artifacts, 4: _state}
+    actions = {0: _svc, 1: _resilience, 2: _timer, 3: _webui, 4: _artifacts, 5: _state}
     for i in chosen:
         try:
             actions[i]()
@@ -48,6 +49,14 @@ def _resilience() -> None:
 
 def _timer() -> None:
     timer.remove()
+
+
+def _webui() -> None:
+    from .. import webui
+    if webui.is_installed():
+        webui.remove()
+    else:
+        shell.info("未安装独立 Web 面板服务，跳过。")
 
 
 def _artifacts() -> None:

@@ -14,10 +14,13 @@ from .menu import Cancelled, select
 
 def _update() -> None:
     """非交互更新：内核/UI/规则集 + 同步重启服务。供每周定时器调用。"""
-    from . import core, service
+    from . import core, paths, service, webui
     from .subscription import manager
 
-    core.download_all(force=True)
+    has_ui = (paths.UI_DIR / "index.html").exists()
+    core.download_all(force=True, with_ui=has_ui)
+    if has_ui:
+        webui.refresh()  # UI 更新后重新暂存独立面板（若已安装）
     if manager.get_active() and service.is_installed():
         service.sync_and_restart()
 

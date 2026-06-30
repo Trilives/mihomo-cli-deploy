@@ -343,12 +343,13 @@ def _make_fetcher() -> _Fetcher:
     return _Fetcher(s["download_proxy"])
 
 
-def download_all(*, compatible: bool = False, force: bool = False) -> str:
-    """初始化用：下载内核 + geo 数据 + UI，返回内核版本。"""
+def download_all(*, compatible: bool = False, force: bool = False, with_ui: bool = True) -> str:
+    """初始化用：下载内核 + geo 数据（+ 可选 Web UI），返回内核版本。"""
     f = _make_fetcher()
     version = update_core(f, compatible=compatible, force=force)
     update_geodata(f, force=force)
-    update_ui(f, force=force)
+    if with_ui:
+        update_ui(f, force=force)
     return version
 
 

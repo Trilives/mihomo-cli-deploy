@@ -19,6 +19,7 @@ _OPTIONS = [
     "切换 / 固定节点 ※即时",
     "更新 内核 / UI / geo 数据 ※即时",
     "服务设置（重启 / 状态）※即时",
+    "独立 Web 面板（根路径直开）※即时",
     "网络自愈设置 ※即时",
     "每周更新定时器 ※即时",
 ]
@@ -34,7 +35,7 @@ def run() -> None:
 
         handlers = [
             _subscriptions, _edit_customize, _node_select,
-            _update_core, _service_settings, _resilience, _timer,
+            _update_core, _service_settings, _webui, _resilience, _timer,
         ]
         while True:
             try:
@@ -164,10 +165,19 @@ def _node_select() -> None:
 def _update_core() -> None:
     if not menu.confirm("更新 内核 / UI / geo 数据？", default=True):
         return
-    core.download_all(force=True)
+    has_ui = (paths.UI_DIR / "index.html").exists()
+    core.download_all(force=True, with_ui=has_ui)
+    if has_ui:
+        from .. import webui
+        webui.refresh()  # UI 更新后重新暂存独立面板（若已安装）
     active = manager.get_active()
     if active and service.is_installed():
         service.sync_and_restart()
+
+
+def _webui() -> None:
+    from .. import webui
+    webui.menu_flow()
 
 
 def _service_settings() -> None:
