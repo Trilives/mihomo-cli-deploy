@@ -1,0 +1,2 @@
+"""Mihomo deployment CLI package."""
+

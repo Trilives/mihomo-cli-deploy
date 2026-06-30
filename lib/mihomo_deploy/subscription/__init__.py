@@ -1,0 +1,2 @@
+"""Mihomo subscription management."""
+

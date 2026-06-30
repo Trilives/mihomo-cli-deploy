@@ -1,12 +1,10 @@
 # Secrets / local environment
 .env
 .env.*
-!.env.example
-sing_box/Script/Enhance/clash_nodes_to_singbox_config.json
-!sing_box/Script/Enhance/clash_nodes_to_singbox_config.json.example
 
 # Runtime files
 .run/
+state/
 cache.db
 config.yaml
 __pycache__/
@@ -19,19 +17,10 @@ source/*.zip
 source/*.tar.gz
 source/*.tgz
 source/*.gz
-sing_box/source/downloads/
-sing_box/source/*.zip
-sing_box/source/*.tar.gz
-sing_box/source/*.tgz
-sing_box/source/*.gz
 
 # Upstream downloadable assets (large binaries)
 mihomo
 mihomo.version
-sing_box/sing-box
-sing_box/sing-box.version
-sing_box/config.json
-sing_box/ui/
 ui/
 country.mmdb
 geoip.metadb
@@ -40,11 +29,11 @@ GeoSite.dat
 ASN.mmdb
 GeoIP.dat
 
-# Rule sets
+# Rule sets / backups
 ruleset/
+backups/
 
 # Local backups / temp files
-backups/
 config.yaml.bak.*
 *.tmp
 *.swp
@@ -54,6 +43,3 @@ tmp/
 # Optional OS junk
 .DS_Store
 Thumbs.db
-
-# Duplicate entries (already covered above)
-# ui
