@@ -54,6 +54,26 @@ def _strip_ansi(s: str) -> str:
     return re.sub(r"\033\[[0-9;?]*[A-Za-z]", "", s)
 
 
+def _max_box_width() -> int:
+    """选择框内容最大宽度：随终端列数封顶，避免超长选项撑破边框。"""
+    import shutil
+    return max(20, shutil.get_terminal_size((80, 24)).columns - 2)
+
+
+def _truncate(s: str, max_w: int) -> str:
+    """按显示宽度截断，超出部分以省略号收尾。"""
+    if disp_width(s) <= max_w:
+        return s
+    out, width, limit = "", 0, max_w - 1
+    for ch in s:
+        cw = disp_width(ch)
+        if width + cw > limit:
+            break
+        out += ch
+        width += cw
+    return out + "…"
+
+
 class _Painter:
     """在原地重绘多行内容。"""
 
@@ -78,19 +98,22 @@ def select(
     *,
     back_label: str = "返回",
     save_label: str = "",
+    initial: int = 0,
 ) -> int:
     """返回选中项下标。
 
     四个基础键统一生效：↑/↓ 移动、⏎ 确认、esc 保存返回（抛 SaveExit）、
     ^R 回退返回（抛 Cancelled）。save_label 缺省与 back_label 相同——多数菜单里
     两个键效果一致，无需分别措辞；仅在需要区分"保存"与"放弃"时才各传各的。
+    initial 为初始光标位置——同一菜单多次重入时（如从下一级菜单返回），调用方
+    可传入上次选中的下标，使光标停留原位而非每次归零。
     """
     save_label = save_label or back_label
     if not _use_tui():
         return _select_plain(title, options, back_label=back_label, save_label=save_label)
 
-    idx = 0
     n = len(options)
+    idx = initial if 0 <= initial < n else 0
     footer = f"↑/↓ 选择   ⏎ 确认   esc {save_label}   ^R {back_label}"
     painter = _Painter()
     sys.stdout.write(_HIDE)
@@ -132,32 +155,41 @@ def _scroll_top(n: int, idx: int, visible: int) -> int:
 
 
 def _build_select(title: str, options: Sequence[str], idx: int, footer: str) -> list[str]:
-    """渲染选择框；选项多于一屏时滑动显示，仅展示选中项附近的窗口。"""
+    """渲染选择框；选项多于一屏时滑动显示，仅展示选中项附近的窗口。
+    单行内容按终端宽度截断（超出部分省略号收尾），避免超长选项把边框撑破。
+    """
     n = len(options)
     visible = min(_max_visible_rows(), n)
     top = _scroll_top(n, idx, visible)
     end = top + visible
     window = range(top, end)
-    up_hint = f"  ▲ 上方还有 {top} 项" if top > 0 else ""
-    down_hint = f"  ▼ 下方还有 {n - end} 项" if end < n else ""
+    max_w = _max_box_width()
+    up_hint = _truncate(f"  ▲ 上方还有 {top} 项" if top > 0 else "", max_w)
+    down_hint = _truncate(f"  ▼ 下方还有 {n - end} 项" if end < n else "", max_w)
 
-    label = f"─ {title} "
-    body = [f"  ❯ {_num(i)} {options[i]} " for i in window]
-    w = max(
-        [disp_width(label), disp_width(footer) + 2,
-         disp_width(up_hint), disp_width(down_hint)]
-        + [disp_width(v) for v in body]
-    ) + 2
+    label = _truncate(f"─ {title} ", max_w)
+    footer_text = _truncate("  " + footer, max_w)
+    rows_text = {
+        i: _truncate(f"  {'❯' if i == idx else ' '} {_num(i)} {options[i]} ", max_w)
+        for i in window
+    }
+    w = min(
+        max(
+            [disp_width(label), disp_width(footer_text),
+             disp_width(up_hint), disp_width(down_hint)]
+            + [disp_width(v) for v in rows_text.values()]
+        ) + 2,
+        max_w,
+    )
 
     rows = ["┌" + label + "─" * (w - disp_width(label)) + "┐"]
     rows.append("│" + _DIM + _row_pad(up_hint, w) + _RESET + "│")
     for i in window:
-        cursor = "❯" if i == idx else " "
-        text = f"  {cursor} {_num(i)} {options[i]} "
+        text = rows_text[i]
         text = _CYAN + _BOLD + _row_pad(text, w) + _RESET if i == idx else _row_pad(text, w)
         rows.append("│" + text + "│")
     rows.append("│" + _DIM + _row_pad(down_hint, w) + _RESET + "│")
-    rows.append("│" + _DIM + _row_pad("  " + footer, w) + _RESET + "│")
+    rows.append("│" + _DIM + _row_pad(footer_text, w) + _RESET + "│")
     rows.append("└" + "─" * w + "┘")
     return rows
 
@@ -249,8 +281,10 @@ def _multiselect_plain(title, options, *, default_on) -> list[int]:
 # --------------------------------------------------------------------------- #
 # ask / confirm
 # --------------------------------------------------------------------------- #
-def ask(prompt: str, *, default: str = "", allow_empty: bool = True) -> str:
-    suffix = f" [{default}]" if default else ""
+def ask(prompt: str, *, default: str = "", display_default: str | None = None, allow_empty: bool = True) -> str:
+    """display_default 仅用于替换提示行里展示的默认值（如脱敏），留空回车仍取 default 本身。"""
+    shown = default if display_default is None else display_default
+    suffix = f" [{shown}]" if default else ""
     arrow = (_CYAN + "❯ " + _RESET) if _use_tui() else ""
     while True:
         raw = read_line(f"{arrow}{prompt}{suffix}: ").strip()

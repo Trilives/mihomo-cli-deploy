@@ -44,11 +44,12 @@ def _switch_label() -> str:
 
 
 def _interactive() -> int:
+    idx = 0
     while True:
         options = ["初始化（首次部署）", "更改配置", _switch_label(), "网络测试", "卸载所有服务"]
         actions = [init.run, modify.run, service.toggle_flow, nettest.run, uninstall.run]
         try:
-            idx = select("mihomo 部署系统", options, back_label="退出")
+            idx = select("mihomo 部署系统", options, back_label="退出", initial=idx)
         except Cancelled:
             print("再见。")
             return 0

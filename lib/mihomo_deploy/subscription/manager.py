@@ -178,8 +178,8 @@ def _convert_and_write(sub: Subscription, raw: bytes, cfg: dict) -> None:
         config, ov_info = overlay.apply(config, cfg)
         info.update(ov_info)
 
-    # 地区自动测速聚合组：独立开关，不依赖 overlay / apply_overlay
-    if cfg.get("enable_region_groups"):
+    # 地区自动测速聚合组：各地区独立开关，不依赖 overlay / apply_overlay
+    if cfg.get("generate_sg_groups") or cfg.get("generate_hk_groups"):
         from . import regiongroups
         config, rg_info = regiongroups.apply(config, cfg)
         info.update(rg_info)

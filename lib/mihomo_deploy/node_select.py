@@ -214,10 +214,11 @@ def select(config_path: str | None = None, group: str = "") -> None:
 
     # esc 在第二步（具体节点）只退回第一步（地区/分组），不退出整个切换节点流程；
     # ^R 才会一路穿透到 run() 放弃本次切换。
+    idx = 0
     while True:
         idx = menu.select(
             "选择地区 / 分组", [f"{lbl}（{len(items)}）" for lbl, items in first_menu],
-            back_label="退出切换节点",
+            back_label="退出切换节点", initial=idx,
         )
         label, items = first_menu[idx]
 

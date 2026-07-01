@@ -27,7 +27,6 @@ BASE = {
 }
 
 CUSTOMIZE = {
-    "enable_region_groups": True,
     "generate_sg_groups": True,
     "prefer_keywords": ["SG", "新加坡"],
     "generate_hk_groups": True,
@@ -59,8 +58,8 @@ def test_apply_inserts_into_main() -> None:
 
 
 def test_disabled_region_noop() -> None:
-    print("仅开总开关、未开任何地区 → 不建组")
-    config, info = regiongroups.apply(copy.deepcopy(BASE), {"enable_region_groups": True})
+    print("未开任何地区 → 不建组")
+    config, info = regiongroups.apply(copy.deepcopy(BASE), {})
     check(info["region_groups"] == [], "无地区开启时不建组")
     names = [g["name"] for g in config["proxy-groups"]]
     check(names == ["Proxies"], "proxy-groups 不变")
@@ -68,8 +67,7 @@ def test_disabled_region_noop() -> None:
 
 def test_no_match_skipped() -> None:
     print("地区开启但无匹配节点 → 跳过该地区")
-    cz = {"enable_region_groups": True, "generate_sg_groups": True,
-          "prefer_keywords": ["不存在的地区"]}
+    cz = {"generate_sg_groups": True, "prefer_keywords": ["不存在的地区"]}
     config, info = regiongroups.apply(copy.deepcopy(BASE), cz)
     check(info["region_groups"] == [], "无命中节点不建组")
 
@@ -80,8 +78,7 @@ def test_idempotent_reuse() -> None:
     base["proxy-groups"].append(
         {"name": "HK-Auto", "type": "url-test", "proxies": ["🇭🇰 HK-01"]}
     )
-    config, info = regiongroups.apply(base, {"enable_region_groups": True,
-                                             "generate_hk_groups": True,
+    config, info = regiongroups.apply(base, {"generate_hk_groups": True,
                                              "hk_prefer_keywords": ["HK"]})
     hk_groups = [g for g in config["proxy-groups"] if g["name"] == "HK-Auto"]
     check(len(hk_groups) == 1, "HK-Auto 不重复创建")

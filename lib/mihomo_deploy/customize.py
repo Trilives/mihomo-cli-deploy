@@ -55,8 +55,7 @@ DEFAULTS: dict[str, Any] = {
     "github_token": "",
     "download_proxy": "",
     "webui_port": 9091,
-    # —— 地区自动测速聚合组（独立开关，不依赖 overlay）——
-    "enable_region_groups": False,
+    # —— 地区自动测速聚合组（各地区独立开关，不依赖 overlay）——
     "generate_sg_groups": False,
     "generate_hk_groups": False,
     # —— 分流叠加字段（仅 enable_overlay 时生效）——
@@ -118,9 +117,8 @@ _BOOL_FIELDS = {
     "enable_tun": "TUN 模式（全局透明代理）",
     "lan_proxy": "局域网代理（其他主机可用本机代理）",
     "lan_panel": "LAN 面板暴露",
-    "enable_region_groups": "地区自动测速聚合组（SG/HK，可直接选用）",
-    "generate_sg_groups": "├ 生成新加坡聚合组（SG-Auto）",
-    "generate_hk_groups": "├ 生成香港聚合组（HK-Auto）",
+    "generate_sg_groups": "生成新加坡自动测速聚合组（SG-Auto，可直接选用）",
+    "generate_hk_groups": "生成香港自动测速聚合组（HK-Auto，可直接选用）",
     "enable_overlay": "启用自定义分流叠加（AI / 流媒体）",
     "base64_local_fallback": "base64 应急本地解析",
 }
@@ -153,7 +151,6 @@ _FIELD_ORDER = [
     "tun_route_exclude_cidrs",
     "tun_exclude_uids",
     "base64_local_fallback",
-    "enable_region_groups",
     "generate_sg_groups",
     "generate_hk_groups",
     "prefer_keywords",
@@ -165,13 +162,25 @@ _FIELD_ORDER = [
 ]
 
 
+# 涉密字段：菜单展示与编辑提示里都不出现明文
+_SENSITIVE_FIELDS = {"secret", "github_token"}
+
+
+def _mask_secret(v: str) -> str:
+    return f"已设置（***{v[-4:]}）" if len(v) > 4 else "已设置（***）"
+
+
 def _summary(cfg: dict[str, Any], key: str) -> str:
     v = cfg.get(key, DEFAULTS.get(key))
     if isinstance(v, list):
         return f"{len(v)} 条" if v else "空"
     if isinstance(v, bool):
         return "开" if v else "关"
-    return "未设置" if v in ("", None) else str(v)
+    if v in ("", None):
+        return "未设置"
+    if key in _SENSITIVE_FIELDS:
+        return _mask_secret(str(v))
+    return str(v)
 
 
 def _field_label(cfg: dict[str, Any], key: str) -> str:
@@ -191,11 +200,13 @@ def edit() -> bool:
     original = load()
     cfg = json.loads(json.dumps(original))  # 工作副本
     changed = False
+    idx = 0
     while True:
         try:
             idx = menu.select(
                 "编辑定制层", _edit_labels(cfg),
                 back_label="放弃修改并退出", save_label="保存并退出",
+                initial=idx,
             )
         except menu.SaveExit:
             if not changed:
@@ -236,6 +247,7 @@ def _sync_lan_proxy_firewall(original: dict[str, Any], cfg: dict[str, Any]) -> N
 def _edit_list(cfg: dict[str, Any], key: str, label: str) -> bool:
     is_int = key == "tun_exclude_uids"
     changed = False
+    act = 0
     while True:
         items = list(cfg.get(key, []))
         shell.info(f"{label}：当前 {len(items)} 条" + (("：" + ", ".join(str(x) for x in items)) if items else ""))
@@ -243,6 +255,7 @@ def _edit_list(cfg: dict[str, Any], key: str, label: str) -> bool:
             act = menu.select(
                 f"编辑 · {label}",
                 ["添加一条", "删除一条", "批量粘贴替换（逗号/空格分隔）", "恢复默认", "清空"],
+                initial=act,
             )
         except menu.Cancelled:
             return changed
@@ -272,8 +285,9 @@ def _edit_list(cfg: dict[str, Any], key: str, label: str) -> bool:
 
 def _edit_scalar(cfg: dict[str, Any], key: str, label: str) -> bool:
     cur = str(cfg.get(key, "") or "")
+    display = _mask_secret(cur) if key in _SENSITIVE_FIELDS and cur else cur
     try:
-        val = menu.ask(f"{label}（留空清除）", default=cur, allow_empty=True)
+        val = menu.ask(f"{label}（留空清除）", default=cur, display_default=display, allow_empty=True)
     except menu.Cancelled:
         return False
     if key in ("bootstrap_dns_port", "webui_port"):

@@ -4,9 +4,9 @@
 **额外**生成 url-test 聚合组（如 SG-Auto / HK-Auto）：按节点名关键词聚合该地区节点、自动
 选最低延迟，并把聚合组插入主选择组前部，使其可直接作为出口选用——无需自己建分组。
 
-与 overlay（AI / 流媒体自定义分流）相互独立：由 customize.enable_region_groups 单独开关，
-不依赖 enable_overlay / 订阅级 apply_overlay。overlay 也复用本模块的基础函数构造同样的
-地区组，故两者共存时不会重复建组（同名 url-test 组会被复用）。
+与 overlay（AI / 流媒体自定义分流）相互独立：由 customize.generate_sg_groups /
+generate_hk_groups 各地区独立开关，不依赖 enable_overlay / 订阅级 apply_overlay。overlay
+也复用本模块的基础函数构造同样的地区组，故两者共存时不会重复建组（同名 url-test 组会被复用）。
 """
 
 from __future__ import annotations
