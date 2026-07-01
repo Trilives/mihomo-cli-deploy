@@ -8,8 +8,9 @@
 - Web UI 仍用 MetaCubeX/metacubexd（Clash API 面板通用）。
 - 下载仍用 curl 子进程：保留"代理优先→直连兜底"通道、重试、断点续传、完整性校验。
 
-下载相关设置（download_proxy / github_mirror）从 state/customize.json 读取，
-未配置时回退环境变量 / 直连。本模块不依赖 customize.py，直接读 JSON，避免循环依赖。
+下载相关设置（download_proxy / github_mirror / github_token）从 state/customize.json 读取，
+未配置时回退环境变量（github_token 回退 GITHUB_TOKEN / GH_TOKEN）/ 直连。
+本模块不依赖 customize.py，直接读 JSON，避免循环依赖。
 """
 
 from __future__ import annotations
@@ -77,7 +78,41 @@ def _settings() -> dict:
             data = {}
     proxy = data.get("download_proxy") or os.environ.get("DOWNLOAD_PROXY") or ""
     mirror = data.get("github_mirror") or ""
-    return {"download_proxy": proxy.strip(), "github_mirror": mirror.strip()}
+    token = data.get("github_token") or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+    return {"download_proxy": proxy.strip(), "github_mirror": mirror.strip(), "github_token": token.strip()}
+
+
+def _prompt_and_save_token() -> str:
+    """未配置 GitHub Token 时交互式询问是否补充，输入后写回 customize.json。
+
+    非 TTY（如每周定时更新）静默跳过，避免无人值守时卡在读输入。
+    """
+    from . import keys, menu
+
+    if not keys.interactive_tty():
+        return ""
+    shell.warn("未配置 GitHub Token，匿名 API 限额较低（60 次/小时），高频操作易被限流。")
+    try:
+        if not menu.confirm("现在添加 GitHub Token？", default=False):
+            return ""
+        token = menu.ask("GitHub Token", allow_empty=True)
+    except menu.Cancelled:
+        return ""
+    if not token:
+        return ""
+    data: dict = {}
+    if paths.CUSTOMIZE_FILE.exists():
+        try:
+            data = json.loads(paths.CUSTOMIZE_FILE.read_text("utf-8"))
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data["github_token"] = token
+    paths.ensure_state_dirs()
+    paths.CUSTOMIZE_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", "utf-8")
+    shell.ok("GitHub Token 已保存到 customize.json。")
+    return token
 
 
 def _mirror(url: str, mirror: str) -> str:
@@ -95,8 +130,9 @@ def _mirror(url: str, mirror: str) -> str:
 # curl 通道：代理优先 → 直连兜底
 # --------------------------------------------------------------------------- #
 class _Fetcher:
-    def __init__(self, proxy: str):
+    def __init__(self, proxy: str, token: str = ""):
         self.proxy = proxy
+        self.token = token
         self._direct_ok: bool | None = None
 
     def _direct_reachable(self) -> bool:
@@ -141,9 +177,8 @@ class _Fetcher:
         """拉取 URL 文本并解析 JSON（用于 GitHub API）。"""
         with tempfile.NamedTemporaryFile("r+", suffix=".json", delete=True) as tf:
             extra = ["-sS", "-o", tf.name]
-            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-            if token:
-                extra += ["-H", f"Authorization: Bearer {token}"]
+            if self.token:
+                extra += ["-H", f"Authorization: Bearer {self.token}"]
             extra.append(url)
             self.fetch(extra)
             tf.seek(0)
@@ -336,16 +371,22 @@ def _find_ui_root(extract_dir: Path) -> Path | None:
     return indexes[0].parent if indexes else None
 
 
-def _make_fetcher() -> _Fetcher:
+def _make_fetcher(*, interactive: bool = True) -> _Fetcher:
     s = _settings()
     if s["download_proxy"]:
         shell.info(f"使用下载代理: {s['download_proxy']}")
-    return _Fetcher(s["download_proxy"])
+    token = s["github_token"]
+    if not token and interactive:
+        token = _prompt_and_save_token()
+    return _Fetcher(s["download_proxy"], token)
 
 
-def download_all(*, compatible: bool = False, force: bool = False) -> str:
-    """初始化用：下载内核 + geo 数据 + UI，返回内核版本。"""
-    f = _make_fetcher()
+def download_all(*, compatible: bool = False, force: bool = False, interactive: bool = True) -> str:
+    """下载内核 + geo 数据 + UI，返回内核版本。
+
+    interactive=False 供无人值守场景（如每周定时更新）使用，跳过 Token 缺失时的交互询问。
+    """
+    f = _make_fetcher(interactive=interactive)
     version = update_core(f, compatible=compatible, force=force)
     update_geodata(f, force=force)
     update_ui(f, force=force)

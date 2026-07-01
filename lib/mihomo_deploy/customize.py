@@ -52,6 +52,7 @@ DEFAULTS: dict[str, Any] = {
     "subconverter_backend": DEFAULT_SUBCONVERTER_BACKEND,
     "base64_local_fallback": False,
     "github_mirror": "",
+    "github_token": "",
     "download_proxy": "",
     # —— 分流叠加字段（仅 enable_overlay 时生效）——
     "enable_overlay": False,
@@ -126,6 +127,7 @@ _SCALAR_FIELDS = {
     "bootstrap_dns_port": "引导 DNS 端口",
     "subconverter_backend": "subconverter 后端",
     "github_mirror": "GitHub 加速前缀",
+    "github_token": "GitHub Token（提升 API 限额）",
     "download_proxy": "下载代理",
 }
 
@@ -138,6 +140,7 @@ _FIELD_ORDER = [
     "secret",
     "download_proxy",
     "github_mirror",
+    "github_token",
     "subconverter_backend",
     "bootstrap_dns_server",
     "bootstrap_dns_port",

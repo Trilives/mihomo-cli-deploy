@@ -17,7 +17,7 @@ def _update() -> None:
     from . import core, service
     from .subscription import manager
 
-    core.download_all(force=True)
+    core.download_all(force=True, interactive=False)
     if manager.get_active() and service.is_installed():
         service.sync_and_restart()
 
