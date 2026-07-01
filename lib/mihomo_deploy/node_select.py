@@ -212,14 +212,24 @@ def select(config_path: str | None = None, group: str = "") -> None:
     if subgroups:
         first_menu.append(("🧭 子组（自动测速 / 故障转移）", subgroups))
 
-    idx = menu.select("选择地区 / 分组", [f"{lbl}（{len(items)}）" for lbl, items in first_menu])
-    label, items = first_menu[idx]
+    # esc 在第二步（具体节点）只退回第一步（地区/分组），不退出整个切换节点流程；
+    # ^R 才会一路穿透到 run() 放弃本次切换。
+    while True:
+        idx = menu.select(
+            "选择地区 / 分组", [f"{lbl}（{len(items)}）" for lbl, items in first_menu],
+            back_label="退出切换节点",
+        )
+        label, items = first_menu[idx]
 
-    # 第二步：具体节点（带测速）
-    delays = _measure(api, items) if api_ok else {}  # type: ignore[arg-type]
-    labels = [f"{name}   {_fmt_delay(delays.get(name))}" if api_ok else name for name in items]
-    nidx = menu.select(label, labels)
-    selected = items[nidx]
+        # 第二步：具体节点（带测速）
+        delays = _measure(api, items) if api_ok else {}  # type: ignore[arg-type]
+        labels = [f"{name}   {_fmt_delay(delays.get(name))}" if api_ok else name for name in items]
+        try:
+            nidx = menu.select(label, labels, save_label="返回地区/分组", back_label="放弃并退出")
+        except menu.SaveExit:
+            continue  # 返回地区/分组选择，重新选
+        selected = items[nidx]
+        break
 
     # 应用：写 state/config.yaml + 当前 active 订阅的 config.yaml（双写以跨重启持久）
     targets = [path]

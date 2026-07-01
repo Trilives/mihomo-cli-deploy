@@ -1,11 +1,14 @@
 """交互菜单组件：自绘 TUI（边框盒子 + 方向键高亮）。
 
-TTY 下：方向键上下移动、反显高亮选中、边框盒子、ESC 取消。
+TTY 下：方向键上下移动、反显高亮选中、边框盒子。
 非 TTY（管道/重定向/测试）：自动回退到编号列表 + 文本输入。
 
 公开 API（两种模式签名一致，flows 无需关心）：
     select / multiselect / ask / confirm
-取消（ESC / Ctrl-C / EOF）统一抛 Cancelled。
+
+select() 统一四个基础键：↑/↓ 移动、⏎ 确认、esc 保存返回（抛 SaveExit）、
+^R 回退返回（抛 Cancelled，非 TTY 回退为字符 r）。SaveExit 是 Cancelled 的子类，
+见 errors.py。
 
 仅用标准库；底层按键读取见 keys.py。
 """
@@ -73,27 +76,22 @@ def select(
     title: str,
     options: Sequence[str],
     *,
-    allow_back: bool = True,
     back_label: str = "返回",
-    save_label: str | None = None,
+    save_label: str = "",
 ) -> int:
     """返回选中项下标。
 
-    两种模式：
-    - 普通菜单（save_label=None）：esc = 返回（抛 Cancelled）。
-    - 会话边界菜单（save_label 给定）：esc = 保存并退出（抛 SaveExit，常用、顺手）；
-      组合键 Ctrl-R = 回退并退出（抛 Cancelled，少用、需慎重，避免误触丢改动）。
+    四个基础键统一生效：↑/↓ 移动、⏎ 确认、esc 保存返回（抛 SaveExit）、
+    ^R 回退返回（抛 Cancelled）。save_label 缺省与 back_label 相同——多数菜单里
+    两个键效果一致，无需分别措辞；仅在需要区分"保存"与"放弃"时才各传各的。
     """
+    save_label = save_label or back_label
     if not _use_tui():
-        return _select_plain(title, options, allow_back=allow_back,
-                             back_label=back_label, save_label=save_label)
+        return _select_plain(title, options, back_label=back_label, save_label=save_label)
 
     idx = 0
     n = len(options)
-    if save_label:
-        footer = f"↑/↓ 选择   ⏎ 确认   esc {save_label}   ^R {back_label}"
-    else:
-        footer = f"↑/↓ 选择   ⏎ 确认   esc {back_label}"
+    footer = f"↑/↓ 选择   ⏎ 确认   esc {save_label}   ^R {back_label}"
     painter = _Painter()
     sys.stdout.write(_HIDE)
     try:
@@ -108,11 +106,8 @@ def select(
             elif k == keys.ENTER:
                 return idx
             elif k == keys.ESC:
-                if save_label:
-                    raise SaveExit()
-                if allow_back:
-                    raise Cancelled()
-            elif save_label and k == keys.ROLLBACK:
+                raise SaveExit()
+            elif k == keys.ROLLBACK:
                 raise Cancelled()
             elif k.isdigit():
                 j = int(k) - 1
@@ -167,25 +162,17 @@ def _build_select(title: str, options: Sequence[str], idx: int, footer: str) -> 
     return rows
 
 
-def _select_plain(title, options, *, allow_back, back_label, save_label=None) -> int:
+def _select_plain(title, options, *, back_label, save_label) -> int:
     shell.header(title)
     for i, opt in enumerate(options, 1):
         print(f"  {i}) {opt}")
-    if save_label:
-        print(f"  回车) {save_label}    r) {back_label}")
-    elif allow_back:
-        print(f"  0) {back_label}")
+    print(f"  回车) {save_label}    r) {back_label}")
     while True:
         raw = read_line("请选择: ").strip()
-        if save_label:
-            if raw == "":          # 回车 = 保存并退出
-                raise SaveExit()
-            if raw.lower() == "r":  # r = 回退并退出
-                raise Cancelled()
-        elif raw in ("", "0"):
-            if allow_back:
-                raise Cancelled()
-            continue
+        if raw == "":            # 回车 = esc 的等价：保存返回
+            raise SaveExit()
+        if raw.lower() == "r":   # r = Ctrl-R 的等价：回退返回
+            raise Cancelled()
         if raw.isdigit() and 0 <= int(raw) - 1 < len(options):
             return int(raw) - 1
         shell.warn("无效选择，请重输。")

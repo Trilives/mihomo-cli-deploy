@@ -38,7 +38,7 @@ def ask_new_subscription() -> tuple[str, str, str, bool] | None:
     """
     default_name = time.strftime("sub-%Y%m%d-%H%M%S")
     name = menu.ask("订阅名称，留空=时间戳", default=default_name)
-    idx = menu.select("选择订阅来源类型", _SOURCE_OPTIONS, allow_back=True)
+    idx = menu.select("选择订阅来源类型", _SOURCE_OPTIONS)
     source_type = _SOURCE_TYPES[idx]
     url = menu.ask("订阅链接，留空=暂不配置", allow_empty=True)
     if not url:

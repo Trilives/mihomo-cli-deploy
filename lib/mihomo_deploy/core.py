@@ -9,8 +9,10 @@
 - 下载仍用 curl 子进程：保留"代理优先→直连兜底"通道、重试、断点续传、完整性校验。
 
 下载相关设置（download_proxy / github_mirror / github_token）从 state/customize.json 读取，
-未配置时回退环境变量（github_token 回退 GITHUB_TOKEN / GH_TOKEN）/ 直连。
-本模块不依赖 customize.py，直接读 JSON，避免循环依赖。
+未配置时回退环境变量：download_proxy 回退 DOWNLOAD_PROXY，再回退 shell 的
+http_proxy/https_proxy/all_proxy（proxyenv 写入 bashrc 的那套），github_token 回退
+GITHUB_TOKEN / GH_TOKEN。代理只作「直连不可用」时的兜底——直连可达即彻底绕过（--noproxy '*'），
+避免下载被静默隧道进本地 mihomo → 机场节点（慢）。本模块不依赖 customize.py，直接读 JSON，避免循环依赖。
 """
 
 from __future__ import annotations
@@ -76,10 +78,29 @@ def _settings() -> dict:
             data = json.loads(paths.CUSTOMIZE_FILE.read_text("utf-8"))
         except (json.JSONDecodeError, OSError):
             data = {}
-    proxy = data.get("download_proxy") or os.environ.get("DOWNLOAD_PROXY") or ""
+    proxy = (
+        data.get("download_proxy")
+        or os.environ.get("DOWNLOAD_PROXY")
+        or _ambient_proxy()
+        or ""
+    )
     mirror = data.get("github_mirror") or ""
     token = data.get("github_token") or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     return {"download_proxy": proxy.strip(), "github_mirror": mirror.strip(), "github_token": token.strip()}
+
+
+def _ambient_proxy() -> str:
+    """当前 shell 的代理环境变量（proxyenv.py 写入 bashrc 的 http_proxy/all_proxy 等）。
+
+    仅作 download_proxy 的隐式回退：curl 本就会静默套用这些变量，若不显式接管，
+    下载会被无声地隧道进本地 mihomo → 机场节点（慢）。接管后走「直连优先→代理兜底」，
+    直连可达时彻底绕过它（--noproxy '*'），不可达时才拿它当兜底代理。
+    """
+    for var in ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY"):
+        v = os.environ.get(var)
+        if v and v.strip():
+            return v.strip()
+    return ""
 
 
 def _prompt_and_save_token() -> str:
@@ -161,7 +182,9 @@ class _Fetcher:
             chan_args: list[str] = []
             if ch == "proxy":
                 chan_args = ["--proxy", self.proxy]
-            elif ch == "direct" and self.proxy:
+            elif ch == "direct":
+                # 始终显式绕过 shell 的 http_proxy/all_proxy 等，确保「直连」名副其实，
+                # 否则 curl 会静默套用环境变量把下载隧道进本地代理（慢）。
                 chan_args = ["--noproxy", "*"]
             try:
                 shell.run(["curl", *_CURL_COMMON, *chan_args, *extra], check=True)
@@ -374,7 +397,7 @@ def _find_ui_root(extract_dir: Path) -> Path | None:
 def _make_fetcher(*, interactive: bool = True) -> _Fetcher:
     s = _settings()
     if s["download_proxy"]:
-        shell.info(f"使用下载代理: {s['download_proxy']}")
+        shell.info(f"下载代理（直连不可用时回退）: {s['download_proxy']}")
     token = s["github_token"]
     if not token and interactive:
         token = _prompt_and_save_token()
