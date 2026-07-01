@@ -50,9 +50,14 @@ def run() -> None:
             t.add_undo("撤销防火墙放行 7890", lambda: firewall.revoke(firewall.PROXY_PORT))
             firewall.allow(firewall.PROXY_PORT)
 
-        # 2. 下载内核 + Web UI + geo 数据
-        shell.info("下载 内核 / Web UI / geo 数据（出海慢时会用上面的代理）…")
-        core.download_all()
+        # 2. 下载内核 + geo 数据（Web UI 可选）
+        want_ui = menu.confirm(
+            "下载 Web 管理面板（浏览器查看 / 切换节点）？", default=True
+        )
+        shell.info(
+            "下载 内核 / geo 数据" + ("/ Web UI" if want_ui else "") + "（出海慢时会用上面的代理）…"
+        )
+        core.download_all(with_ui=want_ui)
 
         # 3. 添加首个订阅（链接留空=暂不配置，直接结束初始化）
         #    是否叠加自定义分流在 ask_new_subscription 内询问；默认直用机场自带分流。
@@ -75,6 +80,10 @@ def run() -> None:
         start = menu.confirm("现在就启动服务？（否=仅设开机自启）", default=True)
         service.install(svc, start=start)
 
+        # 5b. 可选：独立 Web 面板（根路径直接打开，免 /ui 后缀）
+        if want_ui:
+            _maybe_setup_webui(t)
+
         # 6. 可选增强：网络自愈 / 每周更新（阶段6 接入，先占位询问）
         _optional_extras(t, svc)
 
@@ -85,6 +94,25 @@ def run() -> None:
 
         shell.ok("初始化完成。")
         _print_access_hint()
+
+
+def _maybe_setup_webui(t: Transaction) -> None:
+    """可选：为面板启用『根路径直接打开』（独立静态服务），体验同 sing-box。"""
+    from .. import firewall, webui
+
+    if not menu.confirm(
+        "为面板启用『根路径直接打开』？（独立端口，浏览器开根地址即用，免去 /ui 后缀）",
+        default=True,
+    ):
+        return
+    cfg = customize.load()
+    lan = bool(cfg.get("lan_panel"))
+    t.add_undo("卸载独立 Web 面板", webui.remove)
+    port = webui.setup_interactive(lan=lan)  # 内部已写回 customize.webui_port
+    if port is None:
+        return
+    if lan:
+        t.add_undo("撤销防火墙放行面板端口", lambda p=port: firewall.revoke(p))
 
 
 def _optional_extras(t: Transaction, svc: str) -> None:
@@ -99,9 +127,17 @@ def _optional_extras(t: Transaction, svc: str) -> None:
 
 
 def _print_access_hint() -> None:
+    from .. import webui
+
     cfg = customize.load()
-    host = "0.0.0.0" if cfg.get("lan_panel") else "127.0.0.1"
-    shell.info(f"Web UI: http://{host}:9090/ui")
+    lan_panel = bool(cfg.get("lan_panel"))
+    host = "0.0.0.0" if lan_panel else "127.0.0.1"
+    if webui.is_installed():
+        port = int(cfg.get("webui_port") or webui.DEFAULT_PORT)
+        disp = host if lan_panel else "127.0.0.1"
+        shell.info(f"Web 面板（根路径直开）: http://{disp}:{port}/")
+    if (paths.UI_DIR / "index.html").exists():
+        shell.info(f"Web UI（mihomo 内置路径）: http://{host}:9090/ui/")
     if host == "127.0.0.1":
         shell.info("远程查看建议用 SSH 端口转发： ssh -N -L 9090:127.0.0.1:9090 user@server")
     if cfg.get("lan_proxy"):

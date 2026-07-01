@@ -381,15 +381,18 @@ def _make_fetcher(*, interactive: bool = True) -> _Fetcher:
     return _Fetcher(s["download_proxy"], token)
 
 
-def download_all(*, compatible: bool = False, force: bool = False, interactive: bool = True) -> str:
-    """下载内核 + geo 数据 + UI，返回内核版本。
+def download_all(
+    *, compatible: bool = False, force: bool = False, with_ui: bool = True, interactive: bool = True,
+) -> str:
+    """下载内核 + geo 数据（+ 可选 Web UI），返回内核版本。
 
     interactive=False 供无人值守场景（如每周定时更新）使用，跳过 Token 缺失时的交互询问。
     """
     f = _make_fetcher(interactive=interactive)
     version = update_core(f, compatible=compatible, force=force)
     update_geodata(f, force=force)
-    update_ui(f, force=force)
+    if with_ui:
+        update_ui(f, force=force)
     return version
 
 

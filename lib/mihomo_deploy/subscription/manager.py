@@ -178,6 +178,16 @@ def _convert_and_write(sub: Subscription, raw: bytes, cfg: dict) -> None:
         config, ov_info = overlay.apply(config, cfg)
         info.update(ov_info)
 
+    # 地区自动测速聚合组：独立开关，不依赖 overlay / apply_overlay
+    if cfg.get("enable_region_groups"):
+        from . import regiongroups
+        config, rg_info = regiongroups.apply(config, cfg)
+        info.update(rg_info)
+        if rg_info.get("region_groups"):
+            shell.info("已生成地区自动测速聚合组：" + ", ".join(rg_info["region_groups"]))
+        else:
+            shell.warn("启用了地区聚合组，但未匹配到对应地区节点（检查关键词与开关）。")
+
     sub.last_node_count = int(info.get("proxies", 0) or 0)
 
     # mihomo 吃 Clash YAML；JSON 内容亦为合法 YAML（见 ARCHITECTURE.md §5）

@@ -29,10 +29,13 @@ chmod +x mihomo.sh
 1. 填下载代理（留空=直连；用于加速下载内核 / UI / geo 数据）。
 2. 选 **TUN 模式**（默认开=整机透明代理；关=纯代理，可选写入 `~/.bashrc` 代理变量）。
 3. （可选）开启局域网代理，按需放行防火墙 7890。
-4. 下载 mihomo 内核 + Web UI（metacubexd）+ geo 数据（geoip.metadb / geosite.dat）。
+4. 下载 mihomo 内核 + geo 数据（geoip.metadb / geosite.dat）；**Web 面板（metacubexd）
+   可选下载**。选择下载后可再启用**「根路径直接打开」**（见下文 Web 面板）。
 5. 添加首个订阅：**链接留空=暂不配置、直接结束**；询问是否叠加自定义分流（默认否＝
    直接沿用机场自带分流）。
-6. 注册 systemd 服务，（可选）网络自愈、每周更新。
+6. 注册 systemd 服务，（可选）独立 Web 面板、网络自愈、每周更新。
+
+> 装好后主菜单的**「启动 / 暂停服务」**可一键统一启停 mihomo 及全部伴生服务（见下文）。
 
 ## 订阅来源（二选一）
 
@@ -51,10 +54,21 @@ chmod +x mihomo.sh
 `external-controller` / `external-ui` / `secret` / `tun`（按开关整段覆写）/ 缺失时补 `dns`。
 订阅自带的 `proxies` / `proxy-groups` / `rules` / `rule-providers` **全部保留**。
 
+## 地区自动测速聚合组（可选增强）
+
+机场订阅通常已自带按地区分的 select 组（HK / SG / JP…，但需手动逐个挑节点）。在「编辑定制
+层」开启 **`enable_region_groups`**（再勾选新加坡 / 香港），即会**额外**生成 `SG-Auto` /
+`HK-Auto` 这类 **url-test 聚合组**：按节点名关键词聚合该地区节点、自动选最低延迟，并插入
+主选择组前部，**可直接作为出口选用**——无需自己建分组。
+
+- 本功能**独立开关**，不依赖下文的自定义分流叠加；关键词在定制层「新加坡 / 香港关键词」可调。
+- 改完定制层会提示「用本地原文重新生成生效订阅并重启」，聚合组即刻生效。
+
 ## 自定义分流叠加（可选）
 
-「更改配置 → 编辑定制层」开启 `enable_overlay` 后，在机场分流之上**叠加**：AI / 流媒体
-选择组、可选 SG / HK 地区组、对应域名规则（插到规则最前，优先命中）。默认关闭。
+「编辑定制层」开启 `enable_overlay` 后，在机场分流之上**叠加**：AI / 流媒体选择组、对应
+域名规则（插到规则最前，优先命中）；如同时开了地区聚合组，AI / 流媒体组会一并纳入它们作为
+成员。默认关闭。
 
 ## 定制层
 
@@ -88,17 +102,49 @@ chmod +x mihomo.sh
 # 单模块调用
 python3 -m mihomo_deploy.core --only core --force
 python3 -m mihomo_deploy.service status -n mihomo
+python3 -m mihomo_deploy.service pause          # 统一暂停 mihomo + 全部伴生单元
+python3 -m mihomo_deploy.webui install --port 9091   # 独立根路径面板
 ```
 
-## Web UI
+## Web 面板
 
-面板默认仅本机 `http://127.0.0.1:9090/ui`。远程查看用 SSH 端口转发：
+面板（metacubexd）在初始化时**可选下载**（不需要可跳过，省下载、保持精简）。
+
+**两种打开方式：**
+
+| 方式 | 地址 | 说明 |
+| --- | --- | --- |
+| mihomo 内置路径 | `http://127.0.0.1:9090/ui/` | mihomo 把面板挂在控制器的 `/ui` 子路径，**须带 `/ui/` 后缀**（这是 mihomo 与 sing-box 的固有差异） |
+| **独立面板（根路径直开）** | `http://127.0.0.1:9091/` | 可选增强：把同一份面板托管在独立端口的**根路径**，浏览器开根地址即用，体验同 sing-box |
+
+**根路径直开**由独立 systemd 服务 `mihomo-webui.service` 提供（`python3 -m http.server`
+托管面板，`config.js` 的 `defaultBackendURL` 指向控制器 9090；依赖 Clash API 默认开启的
+CORS 跨端口通信）。在初始化时可一键启用，或之后在「更改配置 → 独立 Web 面板」管理 / 换端口。
+
+> 为什么不直接换端口就能根路径打开？因为 mihomo 把控制器 API 占在根 `/`、面板固定挂在 `/ui`
+> 子路径，换端口也改不了路径前缀；故用独立静态服务在根路径另起一份。
+
+远程查看（未开 LAN 面板时）用 SSH 端口转发：
 
 ```bash
-ssh -N -L 9090:127.0.0.1:9090 user@server
+ssh -N -L 9090:127.0.0.1:9090 -L 9091:127.0.0.1:9091 user@server
 ```
 
-确需开放局域网时在「定制层」开启 `lan_panel`（务必设 `secret` + 防火墙）。
+确需开放局域网时在「定制层」开启 `lan_panel`（务必设 `secret` + 防火墙；独立面板会随之绑到
+`0.0.0.0` 并提示放行其端口）。
+
+## 服务启停（统一控制）
+
+主菜单第③项**「暂停服务 ⏸ / 启动服务 ▶」**一键统一启停，标签随主服务当前状态变化：
+
+- **暂停**：停止 mihomo 主服务 + **全部伴生单元**（网络自愈 watchdog、独立 Web 面板、
+  每周更新定时器）。先停伴生再停主服务，避免 watchdog 在主服务停掉前抢先把它重启。
+  暂停为运行时停止，单元仍保持开机自启——**重启系统后会自动恢复运行**。
+- **启动**：启动主服务，再拉起全部已安装的伴生单元。
+
+> 伴生单元（尤其 watchdog）必须与 mihomo 统一控制，否则单独停 mihomo 会被它探测到不通而重新
+> 拉起。命令行：`./mihomo.sh pause` / `./mihomo.sh resume`
+> （或 `python3 -m mihomo_deploy.service pause|resume`）。
 
 ## 目录结构
 
@@ -107,16 +153,17 @@ mihomo-cli-deploy/
 ├── mihomo.sh               # 瘦入口：环境检查 → 调起 Python CLI
 ├── lib/mihomo_deploy/      # Python 主体（零依赖，模块可单独 -m 调用）
 ├── templates/              # systemd unit / NM 钩子 / healthcheck 模板
-├── tests/                  # yamlmini / patch / overlay 测试
+├── tests/                  # yamlmini / patch / overlay / regiongroups 测试
 └── state/                  # 运行期产物（gitignore：内核/UI/geo/订阅/配置）
 ```
 
 ## 测试
 
 ```bash
-python3 tests/test_yamlmini.py    # YAML 解析对拍 PyYAML（需 PyYAML，仅测试用）
-python3 tests/test_patch.py       # 最小改写逻辑
-python3 tests/test_overlay.py     # 自定义分流叠加
+python3 tests/test_yamlmini.py      # YAML 解析对拍 PyYAML（需 PyYAML，仅测试用）
+python3 tests/test_patch.py         # 最小改写逻辑
+python3 tests/test_overlay.py       # 自定义分流叠加
+python3 tests/test_regiongroups.py  # 地区自动测速聚合组
 ```
 
 ## 环境要求
